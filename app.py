@@ -628,59 +628,49 @@ def fetch_schedule():
 
 
 def _fetch_wh_schedule():
-    """Fetch schedule from whitehouse.gov."""
-    # The WH schedule page is a WordPress site; try the REST API
-    # WordPress exposes posts at /wp-json/wp/v2/posts with category filtering
-    urls_to_try = [
-        # WP REST API for schedule/briefing posts
-        "https://www.whitehouse.gov/wp-json/wp/v2/pages?slug=presidential-actions",
-        "https://www.whitehouse.gov/wp-json/wp/v2/posts?per_page=10&categories=6",  # daily schedule category
-        "https://www.whitehouse.gov/wp-json/wp/v2/posts?per_page=10&search=schedule",
-        # Direct schedule page
-        "https://www.whitehouse.gov/presidential-actions/",
-        "https://www.whitehouse.gov/briefing-room/statements-releases/",
-    ]
+    """Fetch recent White House activity from whitehouse.gov.
 
+    Note: whitehouse.gov has no public /schedule/ page and its WP REST API
+    requires authentication. We scrape the public listing pages instead:
+    - /briefing-room/statements-releases/ (travel announcements, pool reports)
+    - /presidential-actions/ (executive actions with location context)
+    - /news/ (general news with travel/location cues)
+
+    The site has bot detection, so we use browser-like headers. Fetches may
+    fail from server environments - that's why we have fallback sources.
+    """
     headers = {
         "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
                        "AppleWebKit/537.36 (KHTML, like Gecko) "
-                       "Chrome/120.0.0.0 Safari/537.36",
-        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,"
-                  "application/json;q=0.8,*/*;q=0.7",
+                       "Chrome/131.0.0.0 Safari/537.36",
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.7",
+        "Accept-Language": "en-US,en;q=0.9",
+        "Accept-Encoding": "gzip, deflate, br",
+        "Connection": "keep-alive",
+        "Cache-Control": "max-age=0",
     }
 
-    for url in urls_to_try:
+    # Pages most likely to contain travel/location info
+    urls_to_try = [
+        ("https://www.whitehouse.gov/briefing-room/statements-releases/",
+         "whitehouse.gov statements"),
+        ("https://www.whitehouse.gov/news/",
+         "whitehouse.gov news"),
+        ("https://www.whitehouse.gov/presidential-actions/",
+         "whitehouse.gov actions"),
+    ]
+
+    for url, source_name in urls_to_try:
         try:
-            resp = requests.get(url, headers=headers, timeout=10)
+            resp = requests.get(url, headers=headers, timeout=10,
+                                allow_redirects=True)
             if resp.status_code != 200:
                 continue
 
-            # Try JSON (WP REST API)
-            if "wp-json" in url:
-                posts = resp.json()
-                if isinstance(posts, list) and posts:
-                    events = []
-                    for post in posts[:10]:
-                        title = post.get("title", {}).get("rendered", "")
-                        content = post.get("content", {}).get("rendered", "")
-                        date = post.get("date", "")
-                        # Strip HTML tags for text analysis
-                        clean = re.sub(r'<[^>]+>', ' ', content)
-                        events.append({
-                            "title": re.sub(r'<[^>]+>', '', title),
-                            "description": clean[:500].strip(),
-                            "date": date,
-                            "time": "",
-                            "location": "",
-                        })
-                    if events:
-                        return {"events": events, "source": "whitehouse.gov API"}
-
-            # Try HTML
             soup = BeautifulSoup(resp.text, "html.parser")
-            events = _parse_wh_html_schedule(soup)
+            events = _parse_wh_listing_page(soup)
             if events:
-                return {"events": events, "source": "whitehouse.gov"}
+                return {"events": events, "source": source_name}
 
         except Exception:
             continue
@@ -688,66 +678,102 @@ def _fetch_wh_schedule():
     return None
 
 
-def _parse_wh_html_schedule(soup):
-    """Parse schedule events from White House HTML page."""
+def _parse_wh_listing_page(soup):
+    """Parse listing items from whitehouse.gov WordPress pages.
+
+    The site uses Gutenberg block editor with these known selectors:
+    - div.wp-block-query contains the post list
+    - li elements within that container hold individual items
+    - h2/h3/a elements hold titles
+    - time elements hold dates
+    """
     events = []
 
-    # Look for article/entry elements (WordPress theme patterns)
-    for selector in [
-        "article", ".briefing-statement", ".presidential-action",
-        ".news-item", ".entry-content", ".schedule-item",
-        ".daily-schedule-item", "li.listing-item",
-    ]:
-        items = soup.select(selector)
-        if not items:
-            continue
-
-        for item in items[:15]:
-            title_el = item.select_one(
-                "h2, h3, .title, .entry-title, a"
-            )
-            title = title_el.get_text(strip=True) if title_el else ""
+    # Strategy 1: WordPress block query structure (verified)
+    container = soup.select_one("div.wp-block-query")
+    if container:
+        for li in container.find_all("li")[:15]:
+            link = li.find("a")
+            if not link:
+                continue
+            title = link.get_text(strip=True)
             if not title:
                 continue
 
-            desc_el = item.select_one(
-                ".entry-content, .description, .excerpt, p"
-            )
-            desc = desc_el.get_text(strip=True)[:500] if desc_el else ""
-
-            time_el = item.select_one(
-                "time, .date, .time, .schedule-time"
-            )
-            event_time = time_el.get_text(strip=True) if time_el else ""
+            time_el = li.find("time")
             event_date = ""
-            if time_el and time_el.get("datetime"):
-                event_date = time_el["datetime"]
+            event_time = ""
+            if time_el:
+                event_date = time_el.get("datetime", "")
+                event_time = time_el.get_text(strip=True)
 
             events.append({
                 "title": title,
-                "description": desc,
+                "description": "",
                 "date": event_date,
                 "time": event_time,
                 "location": "",
             })
 
-        if events:
-            break
+    # Strategy 2: Generic article/entry patterns (fallback)
+    if not events:
+        for selector in [
+            "article", "li.listing-item", ".news-item",
+            ".briefing-statement", ".entry",
+        ]:
+            items = soup.select(selector)
+            if not items:
+                continue
+
+            for item in items[:15]:
+                title_el = item.select_one(
+                    "h1.wp-block-whitehouse-topper__headline, "
+                    "h2, h3, .title, .entry-title, a"
+                )
+                title = title_el.get_text(strip=True) if title_el else ""
+                if not title:
+                    continue
+
+                time_el = item.select_one("time, .date")
+                event_date = ""
+                event_time = ""
+                if time_el:
+                    event_date = time_el.get("datetime", "")
+                    event_time = time_el.get_text(strip=True)
+
+                desc_el = item.select_one("p, .excerpt, .description")
+                desc = desc_el.get_text(strip=True)[:300] if desc_el else ""
+
+                events.append({
+                    "title": title,
+                    "description": desc,
+                    "date": event_date,
+                    "time": event_time,
+                    "location": "",
+                })
+
+            if events:
+                break
 
     return events
 
 
 def _fetch_wh_rss():
-    """Fetch schedule from White House RSS/Atom feeds."""
+    """Fetch from White House RSS feeds.
+
+    Note: Current whitehouse.gov may not expose RSS feeds, but we try
+    common WordPress feed URLs as they sometimes work.
+    """
     feed_urls = [
         "https://www.whitehouse.gov/feed/",
         "https://www.whitehouse.gov/briefing-room/feed/",
         "https://www.whitehouse.gov/briefing-room/statements-releases/feed/",
+        "https://www.whitehouse.gov/news/feed/",
     ]
 
     headers = {
         "User-Agent": "Mozilla/5.0 (compatible; TFR-Tracker/1.0)",
-        "Accept": "application/rss+xml, application/xml, text/xml",
+        "Accept": "application/rss+xml, application/xml, text/xml, */*",
     }
 
     for url in feed_urls:
@@ -756,9 +782,13 @@ def _fetch_wh_rss():
             if resp.status_code != 200:
                 continue
 
+            # Verify it's actually XML before parsing
+            content_type = resp.headers.get("Content-Type", "")
+            if "html" in content_type and "xml" not in content_type:
+                continue
+
             root = ElementTree.fromstring(resp.content)
 
-            # Handle RSS 2.0
             events = []
             for item in root.iter("item"):
                 title = item.findtext("title", "")
@@ -784,23 +814,35 @@ def _fetch_wh_rss():
 
 
 def _fetch_factbase_schedule():
-    """Fetch schedule from Factba.se (third-party tracker)."""
-    url = "https://factba.se/biden/calendar"  # They track current president
+    """Fetch schedule from Factba.se (third-party presidential tracker).
+
+    Factba.se tracks presidential schedules, travel, and public appearances.
+    They have both a calendar page and JSON API endpoints.
+    """
     headers = {
         "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
                        "AppleWebKit/537.36 (KHTML, like Gecko) "
-                       "Chrome/120.0.0.0 Safari/537.36",
+                       "Chrome/131.0.0.0 Safari/537.36",
+        "Accept": "application/json, text/html, */*",
     }
 
-    try:
-        # Try their API endpoint
-        today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
-        api_url = f"https://factba.se/json/calendar?date={today}"
-        resp = requests.get(api_url, headers=headers, timeout=10)
-        if resp.status_code == 200:
+    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+
+    # Try Factba.se JSON API endpoints
+    api_urls = [
+        f"https://factba.se/json/calendar?date={today}",
+        "https://factba.se/json/calendar/today",
+    ]
+
+    for api_url in api_urls:
+        try:
+            resp = requests.get(api_url, headers=headers, timeout=10)
+            if resp.status_code != 200:
+                continue
             data = resp.json()
+            items = data if isinstance(data, list) else data.get("data", [])
             events = []
-            for item in (data if isinstance(data, list) else data.get("data", [])):
+            for item in items:
                 events.append({
                     "title": item.get("title", item.get("details", "")),
                     "description": item.get("details", ""),
@@ -810,15 +852,25 @@ def _fetch_factbase_schedule():
                 })
             if events:
                 return {"events": events, "source": "factba.se"}
-    except Exception:
-        pass
+        except Exception:
+            continue
 
-    try:
-        resp = requests.get(url, headers=headers, timeout=10)
-        if resp.status_code == 200:
+    # Try calendar HTML page
+    calendar_urls = [
+        "https://factba.se/trump/calendar",
+        "https://factba.se/biden/calendar",
+    ]
+    for url in calendar_urls:
+        try:
+            resp = requests.get(url, headers=headers, timeout=10)
+            if resp.status_code != 200:
+                continue
             soup = BeautifulSoup(resp.text, "html.parser")
             events = []
-            for item in soup.select(".calendar-item, .schedule-entry, tr, .event"):
+            for item in soup.select(
+                ".calendar-item, .schedule-entry, .event-item, "
+                ".datatable tbody tr, .event"
+            ):
                 text = item.get_text(" ", strip=True)
                 if len(text) > 10:
                     events.append({
@@ -830,8 +882,8 @@ def _fetch_factbase_schedule():
                     })
             if events:
                 return {"events": events[:10], "source": "factba.se"}
-    except Exception:
-        pass
+        except Exception:
+            continue
 
     return None
 
