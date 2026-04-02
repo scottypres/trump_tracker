@@ -77,14 +77,11 @@
 
         .main-content {
             display: grid;
-            grid-template-columns: 1fr 380px;
+            grid-template-columns: 1fr 400px;
             height: calc(100vh - 64px);
         }
 
-        #map {
-            width: 100%;
-            height: 100%;
-        }
+        #map { width: 100%; height: 100%; }
 
         .sidebar {
             background: #111128;
@@ -93,12 +90,67 @@
             padding: 16px;
         }
 
-        .sidebar h2 {
-            font-size: 15px;
+        /* Location banner at top of sidebar */
+        .location-banner {
+            background: linear-gradient(135deg, #1a2a4e 0%, #1a1a3e 100%);
+            border: 1px solid #3a4a7e;
+            border-radius: 8px;
+            padding: 16px;
+            margin-bottom: 16px;
+            text-align: center;
+        }
+
+        .location-banner .loc-label {
+            font-size: 11px;
+            text-transform: uppercase;
+            letter-spacing: 2px;
+            color: #668;
+            margin-bottom: 6px;
+        }
+
+        .location-banner .loc-name {
+            font-size: 22px;
+            font-weight: 700;
+            color: #fff;
+        }
+
+        .location-banner .loc-confidence {
+            font-size: 11px;
+            margin-top: 6px;
+            display: inline-block;
+            padding: 2px 10px;
+            border-radius: 10px;
+        }
+
+        .confidence-high { background: #1a4a2a; color: #66ff88; }
+        .confidence-medium { background: #4a4a1a; color: #ffcc44; }
+        .confidence-low { background: #3a2a1a; color: #cc8844; }
+        .confidence-default { background: #2a2a3a; color: #888; }
+
+        .location-banner .loc-source {
+            font-size: 11px;
+            color: #556;
+            margin-top: 8px;
+        }
+
+        .section-header {
+            font-size: 13px;
             color: #ff6666;
-            margin-bottom: 12px;
+            margin: 16px 0 10px;
             text-transform: uppercase;
             letter-spacing: 1px;
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }
+
+        .section-header .badge {
+            background: #2a2a5e;
+            color: #aaa;
+            font-size: 11px;
+            padding: 1px 7px;
+            border-radius: 8px;
+            font-weight: normal;
         }
 
         .tfr-card {
@@ -107,7 +159,7 @@
             border-left: 3px solid #ff4444;
             border-radius: 6px;
             padding: 14px;
-            margin-bottom: 12px;
+            margin-bottom: 10px;
             cursor: pointer;
             transition: all 0.2s;
         }
@@ -118,10 +170,10 @@
         }
 
         .tfr-card .location-name {
-            font-size: 16px;
+            font-size: 15px;
             font-weight: 600;
             color: #fff;
-            margin-bottom: 4px;
+            margin-bottom: 3px;
         }
 
         .tfr-card .notam-id {
@@ -133,15 +185,11 @@
         .tfr-card .coords {
             font-size: 12px;
             color: #aaa;
-            margin-top: 6px;
+            margin-top: 5px;
             font-family: monospace;
         }
 
-        .tfr-card .details {
-            font-size: 12px;
-            color: #888;
-            margin-top: 8px;
-        }
+        .tfr-card .details { font-size: 12px; color: #888; margin-top: 6px; }
 
         .tfr-card .detail-row {
             display: flex;
@@ -162,44 +210,76 @@
             margin-top: 6px;
         }
 
+        /* Schedule section */
+        .schedule-event {
+            background: #1a1a3e;
+            border: 1px solid #2a2a5e;
+            border-left: 3px solid #4488ff;
+            border-radius: 6px;
+            padding: 12px;
+            margin-bottom: 8px;
+            font-size: 12px;
+        }
+
+        .schedule-event .event-title {
+            font-weight: 600;
+            color: #ccc;
+            margin-bottom: 4px;
+        }
+
+        .schedule-event .event-time {
+            color: #668;
+            font-size: 11px;
+        }
+
+        .schedule-event .event-desc {
+            color: #777;
+            margin-top: 4px;
+            line-height: 1.4;
+        }
+
+        .schedule-empty {
+            color: #555;
+            font-size: 12px;
+            padding: 10px;
+            text-align: center;
+        }
+
         .no-data {
             text-align: center;
-            padding: 40px 20px;
+            padding: 30px 20px;
             color: #666;
         }
 
-        .no-data .big-icon { font-size: 48px; margin-bottom: 12px; }
-
-        .no-data p { margin-top: 8px; font-size: 13px; line-height: 1.5; }
+        .no-data .big-icon { font-size: 40px; margin-bottom: 10px; }
+        .no-data p { margin-top: 6px; font-size: 12px; line-height: 1.5; }
 
         .info-box {
             background: #1a1a3e;
             border: 1px solid #2a2a5e;
             border-radius: 6px;
-            padding: 14px;
+            padding: 12px;
             margin-top: 16px;
-            font-size: 12px;
+            font-size: 11px;
             color: #888;
             line-height: 1.6;
         }
 
         .info-box strong { color: #aaa; }
 
-        .known-locations {
-            margin-top: 16px;
-        }
+        .known-locations { margin-top: 14px; }
 
         .known-locations h3 {
-            font-size: 13px;
-            color: #888;
-            margin-bottom: 8px;
+            font-size: 12px;
+            color: #666;
+            margin-bottom: 6px;
         }
 
         .known-loc-item {
             display: flex;
             align-items: center;
             gap: 8px;
-            padding: 6px 0;
+            padding: 4px 0;
             font-size: 12px;
             color: #aaa;
             cursor: pointer;
@@ -225,6 +305,16 @@
             display: none;
         }
 
+        /* P-56 permanent TFR marker */
+        .p56-label {
+            background: none;
+            border: none;
+            color: #556;
+            font-size: 10px;
+            font-family: monospace;
+            white-space: nowrap;
+        }
+
         @media (max-width: 768px) {
             .main-content {
                 grid-template-columns: 1fr;
@@ -238,7 +328,7 @@
         <h1>
             <span class="icon">&#9992;</span>
             Trump Tracker
-            <span class="subtitle">VIP NOTAM Monitor</span>
+            <span class="subtitle">VIP NOTAM + Schedule Monitor</span>
         </h1>
         <div class="status-bar">
             <span>
@@ -246,30 +336,51 @@
                 <span id="statusText">Initializing...</span>
             </span>
             <span id="lastUpdate" style="color: #666; font-size: 11px;"></span>
-            <button class="refresh-btn" onclick="refreshData()">Refresh</button>
+            <button class="refresh-btn" onclick="refreshAll()">Refresh</button>
         </div>
     </div>
 
     <div class="main-content">
         <div id="map"></div>
         <div class="sidebar">
-            <h2>Active VIP TFRs</h2>
+            <!-- Combined location estimate -->
+            <div class="location-banner" id="locationBanner">
+                <div class="loc-label">Estimated Location</div>
+                <div class="loc-name" id="locName">Loading...</div>
+                <span class="loc-confidence confidence-default" id="locConfidence">checking</span>
+                <div class="loc-source" id="locSource"></div>
+            </div>
+
             <div class="error-banner" id="errorBanner"></div>
+
+            <!-- TFR section -->
+            <div class="section-header">
+                VIP TFRs <span class="badge" id="tfrCount">0</span>
+            </div>
             <div id="tfrList">
                 <div class="no-data">
                     <div class="big-icon">&#128752;</div>
-                    <p>Loading TFR data from FAA...</p>
+                    <p>Loading TFR data...</p>
                 </div>
+            </div>
+
+            <!-- Schedule section -->
+            <div class="section-header">
+                WH Public Schedule <span class="badge" id="scheduleSource">--</span>
+            </div>
+            <div id="scheduleList">
+                <div class="schedule-empty">Loading schedule...</div>
             </div>
 
             <div class="info-box">
                 <strong>How it works:</strong><br>
-                When the President travels, the FAA issues Temporary Flight
-                Restrictions (TFRs) under FAR 91.141. These VIP TFRs typically
-                have a <strong>30 nautical mile diameter</strong> (15 NM radius)
-                and are centered on the President's location. This app monitors
-                FAA NOTAM data for these specific TFRs to determine the likely
-                presidential location.
+                Combines two signals to estimate the President's location:<br>
+                <strong>1. FAA VIP TFRs</strong> - Under FAR 91.141, the FAA issues
+                30 NM diameter flight restrictions centered on the President.
+                This is the strongest signal.<br>
+                <strong>2. WH Schedule</strong> - The public schedule lists events,
+                travel, and location cues. Used when no active TFRs are detected.<br>
+                If neither source shows travel, defaults to the White House (P-56).
             </div>
 
             <div class="known-locations">
@@ -281,10 +392,7 @@
 
     <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
     <script>
-        // Initialize map centered on continental US
-        const map = L.map('map', {
-            zoomControl: true,
-        }).setView([38.5, -96], 5);
+        const map = L.map('map', { zoomControl: true }).setView([38.5, -96], 5);
 
         L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
             attribution: '&copy; <a href="https://www.openstreetmap.org/">OSM</a> &copy; <a href="https://carto.com/">CARTO</a>',
@@ -292,11 +400,10 @@
             maxZoom: 19
         }).addTo(map);
 
-        // Layer groups
         const tfrLayer = L.layerGroup().addTo(map);
         const knownLocLayer = L.layerGroup().addTo(map);
+        const locationLayer = L.layerGroup().addTo(map);
 
-        // Known locations
         const knownLocations = {
             "Mar-a-Lago": [26.677, -80.037],
             "White House": [38.8977, -77.0365],
@@ -304,9 +411,22 @@
             "Bedminster": [40.654, -74.631],
             "Trump Tower NYC": [40.7625, -73.9742],
             "Joint Base Andrews": [38.811, -76.867],
+            "Trump National Doral": [25.812, -80.339],
+            "Trump International Las Vegas": [36.128, -115.169],
         };
 
-        // Add known location markers (small, subtle)
+        // Add P-56 permanent TFR (Washington DC) to map
+        const p56 = L.circle([38.8977, -77.0365], {
+            radius: 25 * 1852,  // ~25 NM radius for the SFRA
+            color: '#335',
+            fillColor: '#224',
+            fillOpacity: 0.05,
+            weight: 1,
+            dashArray: '4, 8',
+        }).addTo(map);
+        p56.bindPopup('<strong>P-56 / DC SFRA</strong><br>Permanent Presidential TFR<br>Washington, DC area');
+
+        // Add known location markers
         const knownLocListEl = document.getElementById('knownLocList');
         Object.entries(knownLocations).forEach(([name, coords]) => {
             const marker = L.circleMarker(coords, {
@@ -318,7 +438,6 @@
             }).addTo(knownLocLayer);
             marker.bindTooltip(name, { permanent: false, direction: 'top' });
 
-            // Sidebar item
             const item = document.createElement('div');
             item.className = 'known-loc-item';
             item.innerHTML = `<span class="known-loc-dot"></span> ${name}`;
@@ -326,88 +445,132 @@
             knownLocListEl.appendChild(item);
         });
 
-        let autoRefreshInterval = null;
-
         function setStatus(state, text) {
-            const dot = document.getElementById('statusDot');
-            const txt = document.getElementById('statusText');
-            dot.className = `status-dot ${state}`;
-            txt.textContent = text;
+            document.getElementById('statusDot').className = `status-dot ${state}`;
+            document.getElementById('statusText').textContent = text;
         }
 
         function showError(msg) {
-            const banner = document.getElementById('errorBanner');
-            banner.style.display = 'block';
-            banner.textContent = msg;
+            const b = document.getElementById('errorBanner');
+            b.style.display = 'block';
+            b.textContent = msg;
         }
 
         function hideError() {
             document.getElementById('errorBanner').style.display = 'none';
         }
 
-        function nmToMeters(nm) {
-            return nm * 1852;
-        }
+        function nmToMeters(nm) { return nm * 1852; }
 
         function formatCoord(lat, lon) {
             const latDir = lat >= 0 ? 'N' : 'S';
             const lonDir = lon >= 0 ? 'E' : 'W';
-            return `${Math.abs(lat).toFixed(4)}°${latDir}, ${Math.abs(lon).toFixed(4)}°${lonDir}`;
+            return `${Math.abs(lat).toFixed(4)}\u00b0${latDir}, ${Math.abs(lon).toFixed(4)}\u00b0${lonDir}`;
         }
 
-        async function refreshData() {
-            setStatus('loading', 'Fetching TFR data...');
+        // ---- Refresh all data sources ----
+        async function refreshAll() {
+            setStatus('loading', 'Fetching data...');
             hideError();
 
-            try {
-                const resp = await fetch('/api/tfrs');
-                if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
-                const data = await resp.json();
+            const [tfrResult, locResult, schedResult] = await Promise.allSettled([
+                fetch('/api/tfrs').then(r => r.json()),
+                fetch('/api/location').then(r => r.json()),
+                fetch('/api/schedule').then(r => r.json()),
+            ]);
 
-                if (data.status === 'error') {
-                    throw new Error(data.message);
+            // TFRs
+            if (tfrResult.status === 'fulfilled' && tfrResult.value.status === 'ok') {
+                renderTFRs(tfrResult.value.tfrs);
+                document.getElementById('tfrCount').textContent = tfrResult.value.count;
+            } else {
+                renderNoTFRs();
+            }
+
+            // Location estimate
+            if (locResult.status === 'fulfilled' && locResult.value.status === 'ok') {
+                renderLocation(locResult.value.location);
+            }
+
+            // Schedule
+            if (schedResult.status === 'fulfilled' && schedResult.value.status === 'ok') {
+                renderSchedule(schedResult.value);
+            } else {
+                document.getElementById('scheduleList').innerHTML =
+                    '<div class="schedule-empty">Schedule unavailable</div>';
+            }
+
+            setStatus('live', 'All sources checked');
+            document.getElementById('lastUpdate').textContent =
+                `Updated: ${new Date().toLocaleTimeString()}`;
+        }
+
+        // ---- Location banner + map marker ----
+        function renderLocation(loc) {
+            document.getElementById('locName').textContent = loc.name;
+            const confEl = document.getElementById('locConfidence');
+            confEl.textContent = loc.confidence;
+            confEl.className = `loc-confidence confidence-${loc.confidence}`;
+            document.getElementById('locSource').textContent = loc.source;
+
+            // Add/update location marker on map
+            locationLayer.clearLayers();
+            if (loc.lat && loc.lon) {
+                const marker = L.marker([loc.lat, loc.lon], {
+                    icon: L.divIcon({
+                        className: '',
+                        html: `<div style="
+                            width: 20px; height: 20px;
+                            background: radial-gradient(circle, #fff 30%, #ff4444 70%);
+                            border-radius: 50%;
+                            border: 2px solid #ff4444;
+                            box-shadow: 0 0 12px rgba(255,68,68,0.6);
+                        "></div>`,
+                        iconSize: [20, 20],
+                        iconAnchor: [10, 10],
+                    }),
+                }).addTo(locationLayer);
+                marker.bindPopup(
+                    `<strong>Estimated Location: ${loc.name}</strong><br>` +
+                    `Confidence: ${loc.confidence}<br>` +
+                    `Source: ${loc.source}<br>` +
+                    (loc.details ? `<br><em>${loc.details}</em>` : '')
+                );
+                marker.bindTooltip(loc.name, { permanent: true, direction: 'top', offset: [0, -14] });
+
+                // Zoom to location if high confidence
+                if (loc.confidence === 'high') {
+                    map.setView([loc.lat, loc.lon], 9);
                 }
-
-                renderTFRs(data.tfrs);
-                setStatus('live', `${data.count} VIP TFR${data.count !== 1 ? 's' : ''} active`);
-                document.getElementById('lastUpdate').textContent =
-                    `Updated: ${new Date().toLocaleTimeString()}`;
-
-            } catch (err) {
-                console.error('Fetch error:', err);
-                setStatus('error', 'Connection error');
-                showError(`Failed to fetch TFR data: ${err.message}. The FAA API may be temporarily unavailable. Will retry automatically.`);
-                renderNoData();
             }
         }
 
+        // ---- TFR rendering ----
         function renderTFRs(tfrs) {
             tfrLayer.clearLayers();
             const listEl = document.getElementById('tfrList');
 
             if (!tfrs || tfrs.length === 0) {
-                renderNoData();
+                renderNoTFRs();
                 return;
             }
 
             listEl.innerHTML = '';
 
-            tfrs.forEach((tfr, i) => {
+            tfrs.forEach((tfr) => {
                 const isInner = tfr.is_inner_ring;
                 const circleColor = isInner ? '#ff6600' : '#ff4444';
                 const ringLabel = isInner ? 'Inner Ring (No-Fly)' : 'Outer Ring (Restricted)';
 
-                // Map circle - different style for inner vs outer ring
                 const circle = L.circle([tfr.lat, tfr.lon], {
                     radius: nmToMeters(tfr.radius_nm),
                     color: circleColor,
                     fillColor: circleColor,
                     fillOpacity: isInner ? 0.25 : 0.10,
-                    weight: isInner ? 2 : 2,
+                    weight: 2,
                     dashArray: isInner ? null : '8, 6',
                 }).addTo(tfrLayer);
 
-                // Center marker (only add once per unique location)
                 const centerMarker = L.circleMarker([tfr.lat, tfr.lon], {
                     radius: 7,
                     color: '#ff4444',
@@ -416,7 +579,6 @@
                     weight: 2,
                 }).addTo(tfrLayer);
 
-                // Popup
                 let popupContent = `<strong style="font-size:14px">VIP TFR - ${ringLabel}</strong><br>`;
                 popupContent += `<span style="color:#888">FAR 91.141 Presidential TFR</span><br><br>`;
                 if (tfr.nearest_known_location) {
@@ -431,87 +593,104 @@
                 circle.bindPopup(popupContent);
                 centerMarker.bindPopup(popupContent);
 
-                // Sidebar card
                 const card = document.createElement('div');
                 card.className = 'tfr-card';
 
                 let locationName = 'Unknown Location';
-                if (tfr.nearest_known_location) {
-                    locationName = `Near ${tfr.nearest_known_location.name}`;
-                }
+                if (tfr.nearest_known_location) locationName = `Near ${tfr.nearest_known_location.name}`;
 
-                const ringType = tfr.is_inner_ring ? 'INNER RING' : 'OUTER RING';
-                const ringColor = tfr.is_inner_ring ? '#ff6600' : '#ff4444';
+                const ringType = isInner ? 'INNER RING' : 'OUTER RING';
+                const ringColor = isInner ? '#ff6600' : '#ff4444';
 
                 card.innerHTML = `
                     <div class="location-name">${locationName}</div>
-                    <div class="notam-id">${tfr.notam_id || 'NOTAM ID unavailable'} &middot; <span style="color:${ringColor}">${ringType}</span></div>
+                    <div class="notam-id">${tfr.notam_id || 'N/A'} &middot; <span style="color:${ringColor}">${ringType}</span></div>
                     <div class="coords">${formatCoord(tfr.lat, tfr.lon)}</div>
                     <div class="details">
                         <div class="detail-row">
                             <span class="label">Radius</span>
                             <span class="value">${tfr.radius_nm} NM (${tfr.radius_km.toFixed(1)} km)</span>
                         </div>
-                        <div class="detail-row">
-                            <span class="label">Type</span>
-                            <span class="value">FAR 91.141 Presidential</span>
-                        </div>
-                        ${tfr.effective_start ? `
-                        <div class="detail-row">
-                            <span class="label">Start</span>
-                            <span class="value">${tfr.effective_start}</span>
-                        </div>` : ''}
-                        ${tfr.effective_end ? `
-                        <div class="detail-row">
-                            <span class="label">End</span>
-                            <span class="value">${tfr.effective_end}</span>
-                        </div>` : ''}
-                        ${tfr.nearest_known_location ? `
-                        <div class="detail-row">
-                            <span class="label">Distance</span>
-                            <span class="value">${tfr.nearest_known_location.distance_km} km from ${tfr.nearest_known_location.name}</span>
-                        </div>` : ''}
+                        ${tfr.effective_start ? `<div class="detail-row"><span class="label">Start</span><span class="value">${tfr.effective_start}</span></div>` : ''}
+                        ${tfr.effective_end ? `<div class="detail-row"><span class="label">End</span><span class="value">${tfr.effective_end}</span></div>` : ''}
                     </div>
                     <span class="time-active">ACTIVE</span>
                 `;
 
-                card.onclick = () => {
-                    map.setView([tfr.lat, tfr.lon], 9);
-                    circle.openPopup();
-                };
-
+                card.onclick = () => { map.setView([tfr.lat, tfr.lon], 9); circle.openPopup(); };
                 listEl.appendChild(card);
             });
 
-            // Fit map to show all TFRs
             if (tfrs.length > 0) {
                 const bounds = L.latLngBounds(tfrs.map(t => [t.lat, t.lon]));
                 map.fitBounds(bounds.pad(0.5));
             }
         }
 
-        function renderNoData() {
-            const listEl = document.getElementById('tfrList');
-            listEl.innerHTML = `
+        function renderNoTFRs() {
+            document.getElementById('tfrList').innerHTML = `
                 <div class="no-data">
                     <div class="big-icon">&#128205;</div>
-                    <p><strong>No active VIP TFRs detected</strong></p>
-                    <p>This could mean:<br>
-                    - The President is at the White House (permanent TFR, not listed as VIP NOTAM)<br>
-                    - No travel TFRs are currently active<br>
-                    - FAA data is temporarily unavailable</p>
-                    <p style="margin-top: 12px; color: #555;">
-                        Data refreshes automatically every 5 minutes.
-                    </p>
+                    <p><strong>No active VIP TFRs</strong></p>
+                    <p>No FAR 91.141 travel TFRs detected.<br>
+                    The President may be at the White House (P-56 permanent TFR).</p>
                 </div>
             `;
         }
 
-        // Initial load
-        refreshData();
+        // ---- Schedule rendering ----
+        function renderSchedule(data) {
+            const listEl = document.getElementById('scheduleList');
+            const srcEl = document.getElementById('scheduleSource');
 
-        // Auto-refresh every 5 minutes
-        autoRefreshInterval = setInterval(refreshData, 5 * 60 * 1000);
+            srcEl.textContent = data.source || 'unavailable';
+
+            if (!data.events || data.events.length === 0) {
+                listEl.innerHTML = '<div class="schedule-empty">No schedule events found</div>';
+                return;
+            }
+
+            listEl.innerHTML = '';
+            data.events.forEach(ev => {
+                const card = document.createElement('div');
+                card.className = 'schedule-event';
+
+                let html = `<div class="event-title">${escapeHtml(ev.title)}</div>`;
+                if (ev.time || ev.date) {
+                    html += `<div class="event-time">${escapeHtml(ev.time || ev.date)}</div>`;
+                }
+                if (ev.description && ev.description !== ev.title) {
+                    const desc = ev.description.length > 200
+                        ? ev.description.slice(0, 200) + '...'
+                        : ev.description;
+                    html += `<div class="event-desc">${escapeHtml(desc)}</div>`;
+                }
+                if (ev.location) {
+                    html += `<div class="event-desc" style="color:#4488ff">Location: ${escapeHtml(ev.location)}</div>`;
+                }
+
+                card.innerHTML = html;
+                listEl.appendChild(card);
+            });
+
+            // Show travel indicator
+            if (data.travel_detected) {
+                const note = document.createElement('div');
+                note.style.cssText = 'background:#4a3a1a;border:1px solid #886622;border-radius:6px;padding:8px;margin-top:8px;font-size:11px;color:#ccaa44;text-align:center;';
+                note.textContent = 'Travel activity detected in schedule';
+                listEl.prepend(note);
+            }
+        }
+
+        function escapeHtml(text) {
+            const div = document.createElement('div');
+            div.textContent = text;
+            return div.innerHTML;
+        }
+
+        // Initial load + auto-refresh
+        refreshAll();
+        setInterval(refreshAll, 5 * 60 * 1000);
     </script>
 </body>
 </html>

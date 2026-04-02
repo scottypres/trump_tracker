@@ -1,16 +1,14 @@
 """
 Trump Tracker - VIP NOTAM Location Tracker
 
-Determines the likely location of the President based on FAA
-Temporary Flight Restrictions (TFRs) with VIP designations
-and ~30 nautical mile diameter restrictions (FAR 91.141).
+Determines the likely location of the President based on:
+1. FAA TFRs with VIP designations / FAR 91.141 (~30 NM diameter)
+2. White House public schedule (daily events, travel, location cues)
 
 Data flow:
-1. Fetch TFR list from tfr.faa.gov (HTML table of all active TFRs)
-2. For each TFR, fetch its XML detail from tfr.faa.gov/save_pages/
-3. Parse XML for airspace shapes (circles with lat/lon/radius)
-4. Filter for 91.141 VIP TFRs with ~30 NM radius (presidential signature)
-5. Also query the FAA NOTAM search API as a secondary source
+- Fetch TFR list from tfr.faa.gov, parse XML detail files for airspace shapes
+- Fetch White House public schedule for event/travel context
+- Combine signals to determine likely presidential location
 """
 
 import json
@@ -26,9 +24,11 @@ from flask import Flask, jsonify, render_template
 
 app = Flask(__name__)
 
-# Cache TFR data for 5 minutes
+# Cache TFR data for 5 minutes, schedule for 30 minutes
 _cache = {"data": None, "timestamp": 0}
+_schedule_cache = {"data": None, "timestamp": 0}
 CACHE_TTL = 300
+SCHEDULE_CACHE_TTL = 1800
 
 HEADERS = {"User-Agent": "Mozilla/5.0 (compatible; TFR-Tracker/1.0)"}
 
@@ -559,6 +559,329 @@ def get_vip_tfrs():
 
 
 # ---------------------------------------------------------------------------
+# White House public schedule (secondary location signal)
+# ---------------------------------------------------------------------------
+
+# Travel keywords that suggest the President is NOT at the White House
+_TRAVEL_KEYWORDS = [
+    "departs", "arrives", "travel", "mar-a-lago", "palm beach",
+    "camp david", "bedminster", "new york", "air force one",
+    "joint base andrews", "marine one", "aboard", "en route",
+    "international trip", "state visit", "foreign travel",
+]
+
+# Location keywords mapped to known locations
+_LOCATION_HINTS = {
+    "mar-a-lago": "Mar-a-Lago",
+    "palm beach": "Mar-a-Lago",
+    "camp david": "Camp David",
+    "bedminster": "Bedminster",
+    "trump tower": "Trump Tower NYC",
+    "new york": "Trump Tower NYC",
+    "doral": "Trump National Doral",
+    "las vegas": "Trump International Las Vegas",
+    "joint base andrews": "Joint Base Andrews",
+    "white house": "White House",
+    "oval office": "White House",
+    "rose garden": "White House",
+    "east room": "White House",
+    "state dining": "White House",
+    "south lawn": "White House",
+    "blair house": "White House",
+}
+
+
+def fetch_schedule():
+    """Fetch the presidential public schedule from multiple sources."""
+    now = time.time()
+    if (_schedule_cache["data"] is not None
+            and (now - _schedule_cache["timestamp"]) < SCHEDULE_CACHE_TTL):
+        return _schedule_cache["data"]
+
+    schedule = {
+        "events": [],
+        "inferred_location": "White House",
+        "location_confidence": "low",
+        "travel_detected": False,
+        "source": None,
+        "fetched_at": datetime.now(timezone.utc).isoformat(),
+    }
+
+    # Try multiple sources in order of preference
+    for fetcher in [_fetch_wh_schedule, _fetch_wh_rss, _fetch_factbase_schedule]:
+        try:
+            result = fetcher()
+            if result and result.get("events"):
+                schedule["events"] = result["events"]
+                schedule["source"] = result["source"]
+                break
+        except Exception as e:
+            print(f"Schedule fetch error ({fetcher.__name__}): {e}")
+
+    # Analyze events for location signals
+    if schedule["events"]:
+        _analyze_schedule_location(schedule)
+
+    _schedule_cache["data"] = schedule
+    _schedule_cache["timestamp"] = now
+    return schedule
+
+
+def _fetch_wh_schedule():
+    """Fetch schedule from whitehouse.gov."""
+    # The WH schedule page is a WordPress site; try the REST API
+    # WordPress exposes posts at /wp-json/wp/v2/posts with category filtering
+    urls_to_try = [
+        # WP REST API for schedule/briefing posts
+        "https://www.whitehouse.gov/wp-json/wp/v2/pages?slug=presidential-actions",
+        "https://www.whitehouse.gov/wp-json/wp/v2/posts?per_page=10&categories=6",  # daily schedule category
+        "https://www.whitehouse.gov/wp-json/wp/v2/posts?per_page=10&search=schedule",
+        # Direct schedule page
+        "https://www.whitehouse.gov/presidential-actions/",
+        "https://www.whitehouse.gov/briefing-room/statements-releases/",
+    ]
+
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+                       "AppleWebKit/537.36 (KHTML, like Gecko) "
+                       "Chrome/120.0.0.0 Safari/537.36",
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,"
+                  "application/json;q=0.8,*/*;q=0.7",
+    }
+
+    for url in urls_to_try:
+        try:
+            resp = requests.get(url, headers=headers, timeout=10)
+            if resp.status_code != 200:
+                continue
+
+            # Try JSON (WP REST API)
+            if "wp-json" in url:
+                posts = resp.json()
+                if isinstance(posts, list) and posts:
+                    events = []
+                    for post in posts[:10]:
+                        title = post.get("title", {}).get("rendered", "")
+                        content = post.get("content", {}).get("rendered", "")
+                        date = post.get("date", "")
+                        # Strip HTML tags for text analysis
+                        clean = re.sub(r'<[^>]+>', ' ', content)
+                        events.append({
+                            "title": re.sub(r'<[^>]+>', '', title),
+                            "description": clean[:500].strip(),
+                            "date": date,
+                            "time": "",
+                            "location": "",
+                        })
+                    if events:
+                        return {"events": events, "source": "whitehouse.gov API"}
+
+            # Try HTML
+            soup = BeautifulSoup(resp.text, "html.parser")
+            events = _parse_wh_html_schedule(soup)
+            if events:
+                return {"events": events, "source": "whitehouse.gov"}
+
+        except Exception:
+            continue
+
+    return None
+
+
+def _parse_wh_html_schedule(soup):
+    """Parse schedule events from White House HTML page."""
+    events = []
+
+    # Look for article/entry elements (WordPress theme patterns)
+    for selector in [
+        "article", ".briefing-statement", ".presidential-action",
+        ".news-item", ".entry-content", ".schedule-item",
+        ".daily-schedule-item", "li.listing-item",
+    ]:
+        items = soup.select(selector)
+        if not items:
+            continue
+
+        for item in items[:15]:
+            title_el = item.select_one(
+                "h2, h3, .title, .entry-title, a"
+            )
+            title = title_el.get_text(strip=True) if title_el else ""
+            if not title:
+                continue
+
+            desc_el = item.select_one(
+                ".entry-content, .description, .excerpt, p"
+            )
+            desc = desc_el.get_text(strip=True)[:500] if desc_el else ""
+
+            time_el = item.select_one(
+                "time, .date, .time, .schedule-time"
+            )
+            event_time = time_el.get_text(strip=True) if time_el else ""
+            event_date = ""
+            if time_el and time_el.get("datetime"):
+                event_date = time_el["datetime"]
+
+            events.append({
+                "title": title,
+                "description": desc,
+                "date": event_date,
+                "time": event_time,
+                "location": "",
+            })
+
+        if events:
+            break
+
+    return events
+
+
+def _fetch_wh_rss():
+    """Fetch schedule from White House RSS/Atom feeds."""
+    feed_urls = [
+        "https://www.whitehouse.gov/feed/",
+        "https://www.whitehouse.gov/briefing-room/feed/",
+        "https://www.whitehouse.gov/briefing-room/statements-releases/feed/",
+    ]
+
+    headers = {
+        "User-Agent": "Mozilla/5.0 (compatible; TFR-Tracker/1.0)",
+        "Accept": "application/rss+xml, application/xml, text/xml",
+    }
+
+    for url in feed_urls:
+        try:
+            resp = requests.get(url, headers=headers, timeout=10)
+            if resp.status_code != 200:
+                continue
+
+            root = ElementTree.fromstring(resp.content)
+
+            # Handle RSS 2.0
+            events = []
+            for item in root.iter("item"):
+                title = item.findtext("title", "")
+                desc = item.findtext("description", "")
+                pub_date = item.findtext("pubDate", "")
+                clean_desc = re.sub(r'<[^>]+>', ' ', desc)
+
+                events.append({
+                    "title": title.strip(),
+                    "description": clean_desc[:500].strip(),
+                    "date": pub_date.strip(),
+                    "time": "",
+                    "location": "",
+                })
+
+            if events:
+                return {"events": events[:10], "source": "whitehouse.gov RSS"}
+
+        except Exception:
+            continue
+
+    return None
+
+
+def _fetch_factbase_schedule():
+    """Fetch schedule from Factba.se (third-party tracker)."""
+    url = "https://factba.se/biden/calendar"  # They track current president
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+                       "AppleWebKit/537.36 (KHTML, like Gecko) "
+                       "Chrome/120.0.0.0 Safari/537.36",
+    }
+
+    try:
+        # Try their API endpoint
+        today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        api_url = f"https://factba.se/json/calendar?date={today}"
+        resp = requests.get(api_url, headers=headers, timeout=10)
+        if resp.status_code == 200:
+            data = resp.json()
+            events = []
+            for item in (data if isinstance(data, list) else data.get("data", [])):
+                events.append({
+                    "title": item.get("title", item.get("details", "")),
+                    "description": item.get("details", ""),
+                    "date": item.get("date", today),
+                    "time": item.get("time", ""),
+                    "location": item.get("location", ""),
+                })
+            if events:
+                return {"events": events, "source": "factba.se"}
+    except Exception:
+        pass
+
+    try:
+        resp = requests.get(url, headers=headers, timeout=10)
+        if resp.status_code == 200:
+            soup = BeautifulSoup(resp.text, "html.parser")
+            events = []
+            for item in soup.select(".calendar-item, .schedule-entry, tr, .event"):
+                text = item.get_text(" ", strip=True)
+                if len(text) > 10:
+                    events.append({
+                        "title": text[:200],
+                        "description": "",
+                        "date": "",
+                        "time": "",
+                        "location": "",
+                    })
+            if events:
+                return {"events": events[:10], "source": "factba.se"}
+    except Exception:
+        pass
+
+    return None
+
+
+def _analyze_schedule_location(schedule):
+    """Analyze schedule events to infer presidential location."""
+    all_text = " ".join(
+        f"{e.get('title', '')} {e.get('description', '')} {e.get('location', '')}"
+        for e in schedule["events"]
+    ).lower()
+
+    # Check for travel indicators
+    travel_detected = any(kw in all_text for kw in _TRAVEL_KEYWORDS)
+    schedule["travel_detected"] = travel_detected
+
+    # Try to identify specific location
+    best_location = None
+    best_priority = -1
+
+    # Priority: explicit location mentions > travel keywords > default
+    for keyword, location_name in _LOCATION_HINTS.items():
+        if keyword in all_text:
+            # Non-WH locations get higher priority (more interesting signal)
+            priority = 2 if location_name != "White House" else 1
+            if priority > best_priority:
+                best_priority = priority
+                best_location = location_name
+
+    if best_location:
+        schedule["inferred_location"] = best_location
+        schedule["location_confidence"] = "medium" if best_priority >= 2 else "low"
+    elif travel_detected:
+        schedule["inferred_location"] = "Traveling"
+        schedule["location_confidence"] = "medium"
+    else:
+        schedule["inferred_location"] = "White House"
+        schedule["location_confidence"] = "low"
+
+    # If we have explicit location in event data, boost confidence
+    for event in schedule["events"]:
+        if event.get("location"):
+            loc_lower = event["location"].lower()
+            for keyword, location_name in _LOCATION_HINTS.items():
+                if keyword in loc_lower:
+                    schedule["inferred_location"] = location_name
+                    schedule["location_confidence"] = "high"
+                    return
+
+
+# ---------------------------------------------------------------------------
 # Flask routes
 # ---------------------------------------------------------------------------
 
@@ -582,6 +905,69 @@ def api_tfrs():
                 "Presidential TFRs have a 30 NM radius outer ring and ~10 NM inner ring. "
                 "Data sourced from FAA. Results may be delayed by a few minutes."
             ),
+        })
+    except Exception as e:
+        return jsonify({"status": "error", "message": str(e)}), 500
+
+
+@app.route("/api/schedule")
+def api_schedule():
+    """API endpoint returning the White House public schedule."""
+    try:
+        schedule = fetch_schedule()
+        return jsonify({"status": "ok", **schedule})
+    except Exception as e:
+        return jsonify({"status": "error", "message": str(e)}), 500
+
+
+@app.route("/api/location")
+def api_location():
+    """Combined endpoint: best guess at presidential location using all signals."""
+    try:
+        tfrs = get_vip_tfrs()
+        schedule = fetch_schedule()
+
+        # TFRs are the strongest signal
+        if tfrs:
+            # Use the first outer-ring TFR as primary
+            primary = next((t for t in tfrs if not t.get("is_inner_ring")), tfrs[0])
+            location = {
+                "lat": primary["lat"],
+                "lon": primary["lon"],
+                "name": (primary.get("nearest_known_location") or {}).get("name", "Unknown"),
+                "confidence": "high",
+                "source": "VIP TFR (FAR 91.141)",
+                "details": f"Active TFR: {primary.get('notam_id', 'N/A')}",
+            }
+        elif schedule.get("inferred_location") and schedule["inferred_location"] != "Traveling":
+            loc_name = schedule["inferred_location"]
+            coords = KNOWN_LOCATIONS.get(loc_name, (38.8977, -77.0365))
+            location = {
+                "lat": coords[0],
+                "lon": coords[1],
+                "name": loc_name,
+                "confidence": schedule.get("location_confidence", "low"),
+                "source": f"White House schedule ({schedule.get('source', 'unknown')})",
+                "details": schedule["events"][0]["title"] if schedule.get("events") else "",
+            }
+        else:
+            # Default: White House
+            location = {
+                "lat": 38.8977,
+                "lon": -77.0365,
+                "name": "White House",
+                "confidence": "default",
+                "source": "No active travel signals detected",
+                "details": "No VIP TFRs or travel schedule entries found. "
+                           "Defaulting to White House (P-56 permanent TFR).",
+            }
+
+        return jsonify({
+            "status": "ok",
+            "location": location,
+            "tfr_count": len(tfrs),
+            "schedule_available": bool(schedule.get("events")),
+            "fetched_at": datetime.now(timezone.utc).isoformat(),
         })
     except Exception as e:
         return jsonify({"status": "error", "message": str(e)}), 500
