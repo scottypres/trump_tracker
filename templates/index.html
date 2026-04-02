@@ -393,33 +393,40 @@
             listEl.innerHTML = '';
 
             tfrs.forEach((tfr, i) => {
-                // Map circle
+                const isInner = tfr.is_inner_ring;
+                const circleColor = isInner ? '#ff6600' : '#ff4444';
+                const ringLabel = isInner ? 'Inner Ring (No-Fly)' : 'Outer Ring (Restricted)';
+
+                // Map circle - different style for inner vs outer ring
                 const circle = L.circle([tfr.lat, tfr.lon], {
                     radius: nmToMeters(tfr.radius_nm),
-                    color: '#ff4444',
-                    fillColor: '#ff4444',
-                    fillOpacity: 0.15,
-                    weight: 2,
-                    dashArray: '5, 5',
+                    color: circleColor,
+                    fillColor: circleColor,
+                    fillOpacity: isInner ? 0.25 : 0.10,
+                    weight: isInner ? 2 : 2,
+                    dashArray: isInner ? null : '8, 6',
                 }).addTo(tfrLayer);
 
-                // Center marker
+                // Center marker (only add once per unique location)
                 const centerMarker = L.circleMarker([tfr.lat, tfr.lon], {
-                    radius: 6,
+                    radius: 7,
                     color: '#ff4444',
                     fillColor: '#ff0000',
-                    fillOpacity: 0.8,
+                    fillOpacity: 0.9,
                     weight: 2,
                 }).addTo(tfrLayer);
 
                 // Popup
-                let popupContent = `<strong>VIP TFR</strong><br>`;
+                let popupContent = `<strong style="font-size:14px">VIP TFR - ${ringLabel}</strong><br>`;
+                popupContent += `<span style="color:#888">FAR 91.141 Presidential TFR</span><br><br>`;
                 if (tfr.nearest_known_location) {
-                    popupContent += `Near: ${tfr.nearest_known_location.name} (${tfr.nearest_known_location.distance_km} km)<br>`;
+                    popupContent += `<strong>Near: ${tfr.nearest_known_location.name}</strong> (${tfr.nearest_known_location.distance_km} km)<br>`;
                 }
                 popupContent += `Coords: ${formatCoord(tfr.lat, tfr.lon)}<br>`;
-                popupContent += `Radius: ${tfr.radius_nm} NM (${tfr.radius_km.toFixed(1)} km)`;
-                if (tfr.notam_id) popupContent += `<br>NOTAM: ${tfr.notam_id}`;
+                popupContent += `Radius: ${tfr.radius_nm} NM (${tfr.radius_km.toFixed(1)} km)<br>`;
+                if (tfr.notam_id) popupContent += `NOTAM: ${tfr.notam_id}<br>`;
+                if (tfr.effective_start) popupContent += `Start: ${tfr.effective_start}<br>`;
+                if (tfr.effective_end) popupContent += `End: ${tfr.effective_end}`;
 
                 circle.bindPopup(popupContent);
                 centerMarker.bindPopup(popupContent);
@@ -433,14 +440,21 @@
                     locationName = `Near ${tfr.nearest_known_location.name}`;
                 }
 
+                const ringType = tfr.is_inner_ring ? 'INNER RING' : 'OUTER RING';
+                const ringColor = tfr.is_inner_ring ? '#ff6600' : '#ff4444';
+
                 card.innerHTML = `
                     <div class="location-name">${locationName}</div>
-                    <div class="notam-id">${tfr.notam_id || 'NOTAM ID unavailable'}</div>
+                    <div class="notam-id">${tfr.notam_id || 'NOTAM ID unavailable'} &middot; <span style="color:${ringColor}">${ringType}</span></div>
                     <div class="coords">${formatCoord(tfr.lat, tfr.lon)}</div>
                     <div class="details">
                         <div class="detail-row">
                             <span class="label">Radius</span>
                             <span class="value">${tfr.radius_nm} NM (${tfr.radius_km.toFixed(1)} km)</span>
+                        </div>
+                        <div class="detail-row">
+                            <span class="label">Type</span>
+                            <span class="value">FAR 91.141 Presidential</span>
                         </div>
                         ${tfr.effective_start ? `
                         <div class="detail-row">
