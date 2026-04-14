@@ -245,6 +245,87 @@
             text-align: center;
         }
 
+        /* News articles */
+        .news-article {
+            background: #1a1a3e;
+            border: 1px solid #2a2a5e;
+            border-left: 3px solid #44bb88;
+            border-radius: 6px;
+            padding: 10px 12px;
+            margin-bottom: 6px;
+            font-size: 12px;
+        }
+
+        .news-article .news-title {
+            font-weight: 600;
+            color: #ccc;
+            margin-bottom: 3px;
+            line-height: 1.3;
+        }
+
+        .news-article .news-meta {
+            color: #556;
+            font-size: 10px;
+        }
+
+        /* Social posts */
+        .social-post {
+            background: #1a1a3e;
+            border: 1px solid #2a2a5e;
+            border-left: 3px solid #4499dd;
+            border-radius: 6px;
+            padding: 10px 12px;
+            margin-bottom: 6px;
+            font-size: 12px;
+        }
+
+        .social-post .post-text {
+            color: #bbb;
+            line-height: 1.3;
+        }
+
+        .social-post .post-author {
+            color: #4499dd;
+            font-size: 11px;
+            font-weight: 600;
+        }
+
+        .social-post .post-meta {
+            color: #556;
+            font-size: 10px;
+            margin-top: 3px;
+        }
+
+        /* Signal summary bar */
+        .signals-bar {
+            display: flex;
+            gap: 6px;
+            margin-bottom: 14px;
+            flex-wrap: wrap;
+        }
+
+        .signal-chip {
+            font-size: 10px;
+            padding: 3px 8px;
+            border-radius: 10px;
+            border: 1px solid #333;
+            color: #888;
+        }
+
+        .signal-chip.active { border-color: #44bb88; color: #44bb88; }
+        .signal-chip.inactive { border-color: #333; color: #444; }
+
+        .section-collapse {
+            cursor: pointer;
+            user-select: none;
+        }
+
+        .section-collapse .toggle {
+            font-size: 10px;
+            color: #555;
+            margin-left: 4px;
+        }
+
         .no-data {
             text-align: center;
             padding: 30px 20px;
@@ -364,23 +445,59 @@
                 </div>
             </div>
 
-            <!-- Schedule section -->
-            <div class="section-header">
-                WH Public Schedule <span class="badge" id="scheduleSource">--</span>
+            <!-- Source signals summary -->
+            <div class="signals-bar" id="signalsBar">
+                <span class="signal-chip inactive" id="sigTfr">TFRs</span>
+                <span class="signal-chip inactive" id="sigNews">News</span>
+                <span class="signal-chip inactive" id="sigSocial">Social</span>
+                <span class="signal-chip inactive" id="sigSchedule">Schedule</span>
             </div>
-            <div id="scheduleList">
-                <div class="schedule-empty">Loading schedule...</div>
+
+            <!-- News section -->
+            <div class="section-header section-collapse" onclick="toggleSection('newsSection')">
+                News <span class="badge" id="newsCount">0</span>
+                <span class="toggle" id="newsToggle">[-]</span>
+            </div>
+            <div id="newsSection">
+                <div id="newsList">
+                    <div class="schedule-empty">Loading news...</div>
+                </div>
+            </div>
+
+            <!-- Social section -->
+            <div class="section-header section-collapse" onclick="toggleSection('socialSection')">
+                Social / Pool Reports <span class="badge" id="socialCount">0</span>
+                <span class="toggle" id="socialToggle">[-]</span>
+            </div>
+            <div id="socialSection">
+                <div id="socialList">
+                    <div class="schedule-empty">Loading social data...</div>
+                </div>
+            </div>
+
+            <!-- Schedule section -->
+            <div class="section-header section-collapse" onclick="toggleSection('scheduleSection')">
+                WH Schedule <span class="badge" id="scheduleSource">--</span>
+                <span class="toggle" id="scheduleToggle">[-]</span>
+            </div>
+            <div id="scheduleSection">
+                <div id="scheduleList">
+                    <div class="schedule-empty">Loading schedule...</div>
+                </div>
             </div>
 
             <div class="info-box">
                 <strong>How it works:</strong><br>
-                Combines two signals to estimate the President's location:<br>
-                <strong>1. FAA VIP TFRs</strong> - Under FAR 91.141, the FAA issues
-                30 NM diameter flight restrictions centered on the President.
-                This is the strongest signal.<br>
-                <strong>2. WH Schedule</strong> - The public schedule lists events,
-                travel, and location cues. Used when no active TFRs are detected.<br>
-                If neither source shows travel, defaults to the White House (P-56).
+                Combines four signal sources with weighted confidence scoring:<br>
+                <strong>1. FAA VIP TFRs</strong> (weight: 10) - FAR 91.141 flight
+                restrictions centered on the President. Definitive signal.<br>
+                <strong>2. News</strong> (weight: 5) - Google News / media RSS for
+                real-time travel reporting.<br>
+                <strong>3. Social / Pool</strong> (weight: 4) - X/Twitter press pool
+                reports via Nitter/RSS-Bridge. Most current signal.<br>
+                <strong>4. WH Schedule</strong> (weight: 3) - Official public schedule
+                and statements for location cues.<br>
+                Multiple sources agreeing boosts confidence. Defaults to White House (P-56).
             </div>
 
             <div class="known-locations">
@@ -468,50 +585,114 @@
             return `${Math.abs(lat).toFixed(4)}\u00b0${latDir}, ${Math.abs(lon).toFixed(4)}\u00b0${lonDir}`;
         }
 
+        function toggleSection(id) {
+            const el = document.getElementById(id);
+            const toggleEl = document.getElementById(id.replace('Section', 'Toggle'));
+            if (el.style.display === 'none') {
+                el.style.display = '';
+                if (toggleEl) toggleEl.textContent = '[-]';
+            } else {
+                el.style.display = 'none';
+                if (toggleEl) toggleEl.textContent = '[+]';
+            }
+        }
+
+        function setSignalChip(id, active) {
+            const el = document.getElementById(id);
+            el.className = `signal-chip ${active ? 'active' : 'inactive'}`;
+        }
+
         // ---- Refresh all data sources ----
         async function refreshAll() {
-            setStatus('loading', 'Fetching data...');
+            setStatus('loading', 'Fetching all sources...');
             hideError();
 
-            const [tfrResult, locResult, schedResult] = await Promise.allSettled([
+            const [tfrResult, locResult, schedResult, newsResult, socialResult] = await Promise.allSettled([
                 fetch('/api/tfrs').then(r => r.json()),
                 fetch('/api/location').then(r => r.json()),
                 fetch('/api/schedule').then(r => r.json()),
+                fetch('/api/news').then(r => r.json()),
+                fetch('/api/social').then(r => r.json()),
             ]);
+
+            let sourcesOk = 0;
 
             // TFRs
             if (tfrResult.status === 'fulfilled' && tfrResult.value.status === 'ok') {
                 renderTFRs(tfrResult.value.tfrs);
                 document.getElementById('tfrCount').textContent = tfrResult.value.count;
+                setSignalChip('sigTfr', tfrResult.value.count > 0);
+                sourcesOk++;
             } else {
                 renderNoTFRs();
+                setSignalChip('sigTfr', false);
             }
 
-            // Location estimate
+            // Location estimate (uses all sources server-side)
             if (locResult.status === 'fulfilled' && locResult.value.status === 'ok') {
-                renderLocation(locResult.value.location);
+                renderLocation(locResult.value.location, locResult.value.sources_checked);
+            }
+
+            // News
+            if (newsResult.status === 'fulfilled' && newsResult.value.status === 'ok') {
+                renderNews(newsResult.value);
+                const count = (newsResult.value.articles || []).length;
+                document.getElementById('newsCount').textContent = count;
+                setSignalChip('sigNews', count > 0);
+                sourcesOk++;
+            } else {
+                document.getElementById('newsList').innerHTML =
+                    '<div class="schedule-empty">News unavailable</div>';
+                setSignalChip('sigNews', false);
+            }
+
+            // Social
+            if (socialResult.status === 'fulfilled' && socialResult.value.status === 'ok') {
+                renderSocial(socialResult.value);
+                const count = (socialResult.value.posts || []).length;
+                document.getElementById('socialCount').textContent = count;
+                setSignalChip('sigSocial', count > 0);
+                sourcesOk++;
+            } else {
+                document.getElementById('socialList').innerHTML =
+                    '<div class="schedule-empty">Social data unavailable</div>';
+                setSignalChip('sigSocial', false);
             }
 
             // Schedule
             if (schedResult.status === 'fulfilled' && schedResult.value.status === 'ok') {
                 renderSchedule(schedResult.value);
+                setSignalChip('sigSchedule', (schedResult.value.events || []).length > 0);
+                sourcesOk++;
             } else {
                 document.getElementById('scheduleList').innerHTML =
                     '<div class="schedule-empty">Schedule unavailable</div>';
+                setSignalChip('sigSchedule', false);
             }
 
-            setStatus('live', 'All sources checked');
+            setStatus('live', `${sourcesOk}/4 sources checked`);
             document.getElementById('lastUpdate').textContent =
                 `Updated: ${new Date().toLocaleTimeString()}`;
         }
 
         // ---- Location banner + map marker ----
-        function renderLocation(loc) {
+        function renderLocation(loc, sourcesCounts) {
             document.getElementById('locName').textContent = loc.name;
             const confEl = document.getElementById('locConfidence');
             confEl.textContent = loc.confidence;
             confEl.className = `loc-confidence confidence-${loc.confidence}`;
-            document.getElementById('locSource').textContent = loc.source;
+
+            // Show source(s) that contributed
+            let sourceText = loc.source;
+            if (sourcesCounts) {
+                const parts = [];
+                if (sourcesCounts.tfrs > 0) parts.push(`${sourcesCounts.tfrs} TFR${sourcesCounts.tfrs > 1 ? 's' : ''}`);
+                if (sourcesCounts.news_articles > 0) parts.push(`${sourcesCounts.news_articles} news`);
+                if (sourcesCounts.social_posts > 0) parts.push(`${sourcesCounts.social_posts} social`);
+                if (sourcesCounts.schedule_events > 0) parts.push(`${sourcesCounts.schedule_events} schedule`);
+                if (parts.length) sourceText += ` | Sources: ${parts.join(', ')}`;
+            }
+            document.getElementById('locSource').textContent = sourceText;
 
             // Add/update location marker on map
             locationLayer.clearLayers();
@@ -530,15 +711,22 @@
                         iconAnchor: [10, 10],
                     }),
                 }).addTo(locationLayer);
-                marker.bindPopup(
-                    `<strong>Estimated Location: ${loc.name}</strong><br>` +
+
+                let popupHtml = `<strong>Estimated: ${loc.name}</strong><br>` +
                     `Confidence: ${loc.confidence}<br>` +
-                    `Source: ${loc.source}<br>` +
-                    (loc.details ? `<br><em>${loc.details}</em>` : '')
-                );
+                    (loc.details ? `<em>${loc.details}</em><br>` : '');
+
+                // Show all signals in popup
+                if (loc.all_signals && loc.all_signals.length > 0) {
+                    popupHtml += '<br><strong>All signals:</strong><br>';
+                    loc.all_signals.forEach(s => {
+                        popupHtml += `&bull; ${s.location} (weight ${s.weight}) - ${s.sources.join(', ')}<br>`;
+                    });
+                }
+
+                marker.bindPopup(popupHtml);
                 marker.bindTooltip(loc.name, { permanent: true, direction: 'top', offset: [0, -14] });
 
-                // Zoom to location if high confidence
                 if (loc.confidence === 'high') {
                     map.setView([loc.lat, loc.lon], 9);
                 }
@@ -686,6 +874,85 @@
             const div = document.createElement('div');
             div.textContent = text;
             return div.innerHTML;
+        }
+
+        // ---- News rendering ----
+        function renderNews(data) {
+            const listEl = document.getElementById('newsList');
+
+            if (!data.articles || data.articles.length === 0) {
+                listEl.innerHTML = '<div class="schedule-empty">No relevant news found</div>';
+                return;
+            }
+
+            listEl.innerHTML = '';
+
+            if (data.travel_detected) {
+                const note = document.createElement('div');
+                note.style.cssText = 'background:#1a3a2a;border:1px solid #44bb88;border-radius:6px;padding:6px 10px;margin-bottom:8px;font-size:11px;color:#44bb88;text-align:center;';
+                let noteText = 'Travel activity detected in news';
+                if (data.inferred_location && data.inferred_location !== 'Traveling') {
+                    noteText += ` \u2192 ${data.inferred_location}`;
+                }
+                note.textContent = noteText;
+                listEl.appendChild(note);
+            }
+
+            data.articles.slice(0, 8).forEach(article => {
+                const card = document.createElement('div');
+                card.className = 'news-article';
+
+                let html = `<div class="news-title">${escapeHtml(article.title)}</div>`;
+                const meta = [article.source_name, article.published].filter(Boolean).join(' \u2022 ');
+                if (meta) html += `<div class="news-meta">${escapeHtml(meta)}</div>`;
+
+                card.innerHTML = html;
+                if (article.url) {
+                    card.style.cursor = 'pointer';
+                    card.onclick = () => window.open(article.url, '_blank');
+                }
+                listEl.appendChild(card);
+            });
+        }
+
+        // ---- Social rendering ----
+        function renderSocial(data) {
+            const listEl = document.getElementById('socialList');
+
+            if (!data.posts || data.posts.length === 0) {
+                listEl.innerHTML = '<div class="schedule-empty">No pool reports found</div>';
+                return;
+            }
+
+            listEl.innerHTML = '';
+
+            if (data.travel_detected) {
+                const note = document.createElement('div');
+                note.style.cssText = 'background:#1a2a4a;border:1px solid #4499dd;border-radius:6px;padding:6px 10px;margin-bottom:8px;font-size:11px;color:#4499dd;text-align:center;';
+                let noteText = 'Travel activity detected in social posts';
+                if (data.inferred_location && data.inferred_location !== 'Traveling') {
+                    noteText += ` \u2192 ${data.inferred_location}`;
+                }
+                note.textContent = noteText;
+                listEl.appendChild(note);
+            }
+
+            data.posts.slice(0, 8).forEach(post => {
+                const card = document.createElement('div');
+                card.className = 'social-post';
+
+                let html = '';
+                if (post.author) html += `<div class="post-author">${escapeHtml(post.author)}</div>`;
+                html += `<div class="post-text">${escapeHtml(post.text)}</div>`;
+                if (post.published) html += `<div class="post-meta">${escapeHtml(post.published)}</div>`;
+
+                card.innerHTML = html;
+                if (post.url) {
+                    card.style.cursor = 'pointer';
+                    card.onclick = () => window.open(post.url, '_blank');
+                }
+                listEl.appendChild(card);
+            });
         }
 
         // Initial load + auto-refresh

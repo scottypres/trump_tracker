@@ -24,11 +24,16 @@ from flask import Flask, jsonify, render_template
 
 app = Flask(__name__)
 
-# Cache TFR data for 5 minutes, schedule for 30 minutes
+# Cache TFR data for 5 minutes, schedule for 30 minutes,
+# news/social for 10 minutes
 _cache = {"data": None, "timestamp": 0}
 _schedule_cache = {"data": None, "timestamp": 0}
+_news_cache = {"data": None, "timestamp": 0}
+_social_cache = {"data": None, "timestamp": 0}
 CACHE_TTL = 300
 SCHEDULE_CACHE_TTL = 1800
+NEWS_CACHE_TTL = 600
+SOCIAL_CACHE_TTL = 600
 
 HEADERS = {"User-Agent": "Mozilla/5.0 (compatible; TFR-Tracker/1.0)"}
 
@@ -934,6 +939,525 @@ def _analyze_schedule_location(schedule):
 
 
 # ---------------------------------------------------------------------------
+# Google News / media scraping (real-time travel reporting)
+# ---------------------------------------------------------------------------
+
+def fetch_news():
+    """Fetch recent news about presidential travel/location.
+
+    Scrapes Google News RSS and other news aggregators for headlines
+    containing presidential travel information. News outlets report
+    travel almost in real-time, making this a strong signal.
+    """
+    now = time.time()
+    if _news_cache["data"] is not None and (now - _news_cache["timestamp"]) < NEWS_CACHE_TTL:
+        return _news_cache["data"]
+
+    result = {
+        "articles": [],
+        "inferred_location": None,
+        "location_confidence": None,
+        "travel_detected": False,
+        "source": None,
+        "fetched_at": datetime.now(timezone.utc).isoformat(),
+    }
+
+    for fetcher in [_fetch_google_news_rss, _fetch_bing_news, _fetch_news_fallback]:
+        try:
+            articles = fetcher()
+            if articles:
+                result["articles"] = articles
+                result["source"] = articles[0].get("source_name", "news")
+                break
+        except Exception as e:
+            print(f"News fetch error ({fetcher.__name__}): {e}")
+
+    if result["articles"]:
+        _analyze_news_location(result)
+
+    _news_cache["data"] = result
+    _news_cache["timestamp"] = now
+    return result
+
+
+def _fetch_google_news_rss():
+    """Fetch presidential travel news from Google News RSS.
+
+    Google News provides RSS feeds for search queries. These don't
+    require an API key and return recent headlines with publication dates.
+    """
+    articles = []
+    queries = [
+        "Trump+travels+OR+departs+OR+arrives+OR+%22Air+Force+One%22",
+        "Trump+%22Mar-a-Lago%22+OR+%22Camp+David%22+OR+%22White+House%22+travel",
+    ]
+
+    headers = {
+        "User-Agent": "Mozilla/5.0 (compatible; TFR-Tracker/1.0)",
+        "Accept": "application/rss+xml, application/xml, text/xml, */*",
+    }
+
+    for query in queries:
+        try:
+            url = f"https://news.google.com/rss/search?q={query}&hl=en-US&gl=US&ceid=US:en"
+            resp = requests.get(url, headers=headers, timeout=10)
+            if resp.status_code != 200:
+                continue
+
+            root = ElementTree.fromstring(resp.content)
+            for item in root.iter("item"):
+                title = item.findtext("title", "").strip()
+                desc = item.findtext("description", "").strip()
+                pub_date = item.findtext("pubDate", "").strip()
+                link = item.findtext("link", "").strip()
+                source = item.findtext("source", "").strip()
+
+                if not title:
+                    continue
+
+                # Clean HTML from description
+                clean_desc = re.sub(r'<[^>]+>', ' ', desc).strip()
+
+                articles.append({
+                    "title": title,
+                    "description": clean_desc[:300],
+                    "published": pub_date,
+                    "url": link,
+                    "source_name": source or "Google News",
+                })
+
+            if articles:
+                break
+        except Exception:
+            continue
+
+    # Deduplicate by title similarity
+    seen_titles = set()
+    unique = []
+    for a in articles:
+        key = a["title"][:50].lower()
+        if key not in seen_titles:
+            seen_titles.add(key)
+            unique.append(a)
+
+    return unique[:15]
+
+
+def _fetch_bing_news():
+    """Fetch news from Bing News RSS as a fallback."""
+    articles = []
+    headers = {
+        "User-Agent": "Mozilla/5.0 (compatible; TFR-Tracker/1.0)",
+        "Accept": "application/rss+xml, application/xml, text/xml, */*",
+    }
+
+    queries = [
+        "Trump+travel+Air+Force+One",
+        "Trump+departs+arrives+location",
+    ]
+
+    for query in queries:
+        try:
+            url = f"https://www.bing.com/news/search?q={query}&format=rss"
+            resp = requests.get(url, headers=headers, timeout=10)
+            if resp.status_code != 200:
+                continue
+
+            root = ElementTree.fromstring(resp.content)
+            for item in root.iter("item"):
+                title = item.findtext("title", "").strip()
+                desc = item.findtext("description", "").strip()
+                pub_date = item.findtext("pubDate", "").strip()
+                link = item.findtext("link", "").strip()
+
+                if not title:
+                    continue
+
+                clean_desc = re.sub(r'<[^>]+>', ' ', desc).strip()
+
+                articles.append({
+                    "title": title,
+                    "description": clean_desc[:300],
+                    "published": pub_date,
+                    "url": link,
+                    "source_name": "Bing News",
+                })
+
+            if articles:
+                break
+        except Exception:
+            continue
+
+    return articles[:15]
+
+
+def _fetch_news_fallback():
+    """Fallback: scrape a news aggregator for presidential location headlines."""
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+                       "AppleWebKit/537.36 (KHTML, like Gecko) "
+                       "Chrome/131.0.0.0 Safari/537.36",
+        "Accept": "text/html,*/*",
+    }
+
+    # Try a few general news RSS feeds that cover politics
+    feed_urls = [
+        "https://rss.nytimes.com/services/xml/rss/nyt/Politics.xml",
+        "https://feeds.washingtonpost.com/rss/politics",
+        "https://feeds.reuters.com/Reuters/PoliticsNews",
+        "https://feeds.bbci.co.uk/news/world/us_and_canada/rss.xml",
+    ]
+
+    articles = []
+    for url in feed_urls:
+        try:
+            resp = requests.get(url, headers=headers, timeout=10)
+            if resp.status_code != 200:
+                continue
+
+            root = ElementTree.fromstring(resp.content)
+            for item in root.iter("item"):
+                title = item.findtext("title", "").strip()
+                desc = item.findtext("description", "").strip()
+                pub_date = item.findtext("pubDate", "").strip()
+
+                if not title:
+                    continue
+
+                # Only keep articles mentioning Trump + location/travel
+                combined = f"{title} {desc}".lower()
+                if "trump" not in combined:
+                    continue
+                has_location_signal = any(
+                    kw in combined
+                    for kw in _TRAVEL_KEYWORDS + list(_LOCATION_HINTS.keys())
+                )
+                if not has_location_signal:
+                    continue
+
+                clean_desc = re.sub(r'<[^>]+>', ' ', desc).strip()
+                articles.append({
+                    "title": title,
+                    "description": clean_desc[:300],
+                    "published": pub_date,
+                    "url": "",
+                    "source_name": "News RSS",
+                })
+
+            if len(articles) >= 3:
+                break
+        except Exception:
+            continue
+
+    return articles[:10]
+
+
+def _analyze_news_location(news_result):
+    """Analyze news articles for presidential location signals."""
+    all_text = " ".join(
+        f"{a.get('title', '')} {a.get('description', '')}"
+        for a in news_result["articles"]
+    ).lower()
+
+    # Check for travel
+    news_result["travel_detected"] = any(kw in all_text for kw in _TRAVEL_KEYWORDS)
+
+    # Check for location hints (prioritize non-WH locations)
+    best_location = None
+    best_priority = -1
+
+    for keyword, location_name in _LOCATION_HINTS.items():
+        if keyword in all_text:
+            priority = 2 if location_name != "White House" else 1
+            if priority > best_priority:
+                best_priority = priority
+                best_location = location_name
+
+    if best_location:
+        news_result["inferred_location"] = best_location
+        news_result["location_confidence"] = "medium"
+    elif news_result["travel_detected"]:
+        news_result["inferred_location"] = "Traveling"
+        news_result["location_confidence"] = "medium"
+
+
+# ---------------------------------------------------------------------------
+# Social media / X press pool signals
+# ---------------------------------------------------------------------------
+
+def fetch_social():
+    """Fetch social media signals about presidential location.
+
+    The White House press pool posts real-time location updates on X/Twitter.
+    We scrape aggregators and public feeds since the X API requires paid access.
+    Nitter instances and RSS bridges provide free access to public tweets.
+    """
+    now = time.time()
+    if _social_cache["data"] is not None and (now - _social_cache["timestamp"]) < SOCIAL_CACHE_TTL:
+        return _social_cache["data"]
+
+    result = {
+        "posts": [],
+        "inferred_location": None,
+        "location_confidence": None,
+        "travel_detected": False,
+        "source": None,
+        "fetched_at": datetime.now(timezone.utc).isoformat(),
+    }
+
+    for fetcher in [_fetch_nitter_pool, _fetch_rss_bridge_social, _fetch_social_fallback]:
+        try:
+            posts = fetcher()
+            if posts:
+                result["posts"] = posts
+                result["source"] = posts[0].get("source_name", "social")
+                break
+        except Exception as e:
+            print(f"Social fetch error ({fetcher.__name__}): {e}")
+
+    if result["posts"]:
+        _analyze_social_location(result)
+
+    _social_cache["data"] = result
+    _social_cache["timestamp"] = now
+    return result
+
+
+# Key X/Twitter accounts that post presidential location info
+_POOL_ACCOUNTS = [
+    "WHPoolReport",       # White House pool reports
+    "PoolReporters",      # Press pool
+    "WHPublicPool",       # Public pool feed
+    "ABORAF1Tracking",    # AF1 tracking
+    "AirForceOnePhoto",   # AF1 photo ops with locations
+    "realDonaldTrump",    # Presidential account
+    "ABORAF1",            # AF1 flight tracking
+    "potaboraf1",         # Presidential airlift group
+]
+
+
+def _fetch_nitter_pool():
+    """Fetch press pool posts from Nitter instances (public X/Twitter proxy).
+
+    Nitter is an open-source Twitter frontend that doesn't require API keys.
+    Multiple public instances exist; we try several in case some are down.
+    """
+    posts = []
+
+    # Nitter instances (these rotate availability)
+    nitter_instances = [
+        "nitter.net",
+        "nitter.privacydev.net",
+        "nitter.poast.org",
+        "nitter.woodland.cafe",
+    ]
+
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+                       "AppleWebKit/537.36 (KHTML, like Gecko) "
+                       "Chrome/131.0.0.0 Safari/537.36",
+        "Accept": "application/rss+xml, text/xml, */*",
+    }
+
+    # Try RSS feeds from Nitter for pool accounts
+    for instance in nitter_instances:
+        for account in _POOL_ACCOUNTS[:4]:  # Limit requests per instance
+            try:
+                url = f"https://{instance}/{account}/rss"
+                resp = requests.get(url, headers=headers, timeout=8)
+                if resp.status_code != 200:
+                    continue
+
+                root = ElementTree.fromstring(resp.content)
+                for item in root.iter("item"):
+                    title = item.findtext("title", "").strip()
+                    desc = item.findtext("description", "").strip()
+                    pub_date = item.findtext("pubDate", "").strip()
+                    link = item.findtext("link", "").strip()
+
+                    if not title and not desc:
+                        continue
+
+                    text = title or re.sub(r'<[^>]+>', ' ', desc).strip()
+
+                    # Only keep posts with location/travel signals
+                    text_lower = text.lower()
+                    has_signal = (
+                        any(kw in text_lower for kw in _TRAVEL_KEYWORDS)
+                        or any(kw in text_lower for kw in _LOCATION_HINTS)
+                        or "motorcade" in text_lower
+                        or "marine one" in text_lower
+                        or "pool report" in text_lower
+                        or "lid" in text_lower  # "lid called" = no more events
+                    )
+                    if not has_signal:
+                        continue
+
+                    posts.append({
+                        "text": text[:280],
+                        "author": f"@{account}",
+                        "published": pub_date,
+                        "url": link,
+                        "source_name": f"X via {instance}",
+                    })
+
+                if posts:
+                    return posts[:15]
+
+            except Exception:
+                continue
+
+        if posts:
+            break
+
+    return posts[:15]
+
+
+def _fetch_rss_bridge_social():
+    """Fetch tweets via RSS-Bridge instances (another public Twitter proxy)."""
+    posts = []
+
+    bridges = [
+        "https://rss-bridge.org/bridge01",
+        "https://rss-bridge.bb8.fun",
+    ]
+
+    headers = {
+        "User-Agent": "Mozilla/5.0 (compatible; TFR-Tracker/1.0)",
+        "Accept": "application/rss+xml, text/xml, */*",
+    }
+
+    for bridge in bridges:
+        for account in _POOL_ACCOUNTS[:3]:
+            try:
+                url = (
+                    f"{bridge}/?action=display&bridge=TwitterBridge"
+                    f"&context=By+username&u={account}&norep=on&noretweet=on"
+                    f"&format=Atom"
+                )
+                resp = requests.get(url, headers=headers, timeout=10)
+                if resp.status_code != 200:
+                    continue
+
+                root = ElementTree.fromstring(resp.content)
+                # Atom namespace
+                ns = {"atom": "http://www.w3.org/2005/Atom"}
+
+                for entry in root.findall("atom:entry", ns):
+                    title = entry.findtext("atom:title", "", ns).strip()
+                    content = entry.findtext("atom:content", "", ns).strip()
+                    updated = entry.findtext("atom:updated", "", ns).strip()
+                    link_el = entry.find("atom:link", ns)
+                    link = link_el.get("href", "") if link_el is not None else ""
+
+                    text = title or re.sub(r'<[^>]+>', ' ', content).strip()
+                    text_lower = text.lower()
+
+                    has_signal = (
+                        any(kw in text_lower for kw in _TRAVEL_KEYWORDS)
+                        or any(kw in text_lower for kw in _LOCATION_HINTS)
+                        or "motorcade" in text_lower
+                        or "pool report" in text_lower
+                    )
+                    if not has_signal:
+                        continue
+
+                    posts.append({
+                        "text": text[:280],
+                        "author": f"@{account}",
+                        "published": updated,
+                        "url": link,
+                        "source_name": "X via RSS-Bridge",
+                    })
+
+                if posts:
+                    return posts[:15]
+            except Exception:
+                continue
+
+        if posts:
+            break
+
+    return posts[:15]
+
+
+def _fetch_social_fallback():
+    """Fallback: search Google News for pool report summaries.
+
+    Many news sites aggregate pool reports. We search for recent
+    pool reports which contain real-time presidential location updates.
+    """
+    headers = {
+        "User-Agent": "Mozilla/5.0 (compatible; TFR-Tracker/1.0)",
+        "Accept": "application/rss+xml, text/xml, */*",
+    }
+
+    try:
+        query = "White+House+pool+report+Trump+today"
+        url = f"https://news.google.com/rss/search?q={query}&hl=en-US&gl=US&ceid=US:en"
+        resp = requests.get(url, headers=headers, timeout=10)
+        if resp.status_code != 200:
+            return []
+
+        root = ElementTree.fromstring(resp.content)
+        posts = []
+
+        for item in root.iter("item"):
+            title = item.findtext("title", "").strip()
+            desc = item.findtext("description", "").strip()
+            pub_date = item.findtext("pubDate", "").strip()
+            source = item.findtext("source", "").strip()
+
+            if not title:
+                continue
+
+            clean_desc = re.sub(r'<[^>]+>', ' ', desc).strip()
+
+            posts.append({
+                "text": f"{title} - {clean_desc[:150]}",
+                "author": source or "Pool report",
+                "published": pub_date,
+                "url": "",
+                "source_name": "Pool report (via Google News)",
+            })
+
+        return posts[:10]
+    except Exception:
+        return []
+
+
+def _analyze_social_location(social_result):
+    """Analyze social media posts for presidential location signals."""
+    all_text = " ".join(
+        p.get("text", "") for p in social_result["posts"]
+    ).lower()
+
+    social_result["travel_detected"] = any(kw in all_text for kw in _TRAVEL_KEYWORDS)
+
+    # Check for location hints
+    best_location = None
+    best_priority = -1
+
+    for keyword, location_name in _LOCATION_HINTS.items():
+        if keyword in all_text:
+            priority = 2 if location_name != "White House" else 1
+            if priority > best_priority:
+                best_priority = priority
+                best_location = location_name
+
+    # Social media is often very current - "motorcade" implies active travel
+    if "motorcade" in all_text or "marine one" in all_text:
+        social_result["travel_detected"] = True
+
+    if best_location:
+        social_result["inferred_location"] = best_location
+        social_result["location_confidence"] = "medium"
+    elif social_result["travel_detected"]:
+        social_result["inferred_location"] = "Traveling"
+        social_result["location_confidence"] = "medium"
+
+
+# ---------------------------------------------------------------------------
 # Flask routes
 # ---------------------------------------------------------------------------
 
@@ -972,53 +1496,179 @@ def api_schedule():
         return jsonify({"status": "error", "message": str(e)}), 500
 
 
+@app.route("/api/news")
+def api_news():
+    """API endpoint returning recent news about presidential location."""
+    try:
+        news = fetch_news()
+        return jsonify({"status": "ok", **news})
+    except Exception as e:
+        return jsonify({"status": "error", "message": str(e)}), 500
+
+
+@app.route("/api/social")
+def api_social():
+    """API endpoint returning social media signals about presidential location."""
+    try:
+        social = fetch_social()
+        return jsonify({"status": "ok", **social})
+    except Exception as e:
+        return jsonify({"status": "error", "message": str(e)}), 500
+
+
 @app.route("/api/location")
 def api_location():
-    """Combined endpoint: best guess at presidential location using all signals."""
+    """Combined endpoint: best guess at presidential location using all signals.
+
+    Signal priority (highest to lowest):
+    1. VIP TFR (FAR 91.141) - definitive, FAA-sourced
+    2. Multiple sources agree on same non-WH location - high confidence
+    3. News reports of travel - near real-time
+    4. Social media / pool reports - real-time
+    5. White House schedule - official but may be outdated
+    6. Default: White House (P-56 permanent TFR)
+    """
     try:
         tfrs = get_vip_tfrs()
         schedule = fetch_schedule()
+        news = fetch_news()
+        social = fetch_social()
 
-        # TFRs are the strongest signal
+        # Collect all location signals with weights
+        signals = []  # list of (location_name, confidence_weight, source_label, detail)
+
+        # TFRs: weight 10 (definitive)
         if tfrs:
-            # Use the first outer-ring TFR as primary
             primary = next((t for t in tfrs if not t.get("is_inner_ring")), tfrs[0])
+            loc_name = (primary.get("nearest_known_location") or {}).get("name", "Unknown")
+            signals.append((
+                loc_name, 10, "VIP TFR (FAR 91.141)",
+                f"Active TFR: {primary.get('notam_id', 'N/A')}",
+                primary.get("lat"), primary.get("lon"),
+            ))
+
+        # News: weight 5
+        if news.get("inferred_location") and news["inferred_location"] != "Traveling":
+            signals.append((
+                news["inferred_location"], 5, f"News ({news.get('source', 'unknown')})",
+                news["articles"][0]["title"] if news.get("articles") else "",
+                None, None,
+            ))
+        elif news.get("travel_detected"):
+            signals.append((
+                "Traveling", 3, f"News ({news.get('source', 'unknown')})",
+                "Travel activity detected in news headlines",
+                None, None,
+            ))
+
+        # Social: weight 4 (very current but less authoritative)
+        if social.get("inferred_location") and social["inferred_location"] != "Traveling":
+            signals.append((
+                social["inferred_location"], 4, f"Social media ({social.get('source', 'unknown')})",
+                social["posts"][0]["text"][:100] if social.get("posts") else "",
+                None, None,
+            ))
+        elif social.get("travel_detected"):
+            signals.append((
+                "Traveling", 2, f"Social media ({social.get('source', 'unknown')})",
+                "Travel activity detected in social posts",
+                None, None,
+            ))
+
+        # Schedule: weight 3
+        if (schedule.get("inferred_location")
+                and schedule["inferred_location"] not in ("White House", "Traveling")):
+            signals.append((
+                schedule["inferred_location"], 3,
+                f"WH schedule ({schedule.get('source', 'unknown')})",
+                schedule["events"][0]["title"] if schedule.get("events") else "",
+                None, None,
+            ))
+        elif schedule.get("travel_detected"):
+            signals.append((
+                "Traveling", 1, f"WH schedule ({schedule.get('source', 'unknown')})",
+                "Travel activity in schedule",
+                None, None,
+            ))
+
+        # Score locations: aggregate weights per location
+        location_scores = {}
+        for loc_name, weight, source, detail, lat, lon in signals:
+            if loc_name not in location_scores:
+                location_scores[loc_name] = {
+                    "total_weight": 0, "sources": [], "details": [],
+                    "lat": lat, "lon": lon,
+                }
+            location_scores[loc_name]["total_weight"] += weight
+            location_scores[loc_name]["sources"].append(source)
+            if detail:
+                location_scores[loc_name]["details"].append(detail)
+            # Prefer coordinates from highest-weight source
+            if lat is not None and lon is not None:
+                location_scores[loc_name]["lat"] = lat
+                location_scores[loc_name]["lon"] = lon
+
+        if location_scores:
+            # Pick highest-scoring non-"Traveling" location, or "Traveling" if that's all
+            ranked = sorted(
+                location_scores.items(),
+                key=lambda x: (x[0] != "Traveling", x[1]["total_weight"]),
+                reverse=True,
+            )
+            best_name, best_data = ranked[0]
+
+            # Determine confidence level
+            w = best_data["total_weight"]
+            num_sources = len(best_data["sources"])
+            if w >= 10:
+                confidence = "high"
+            elif w >= 5 or num_sources >= 2:
+                confidence = "medium"
+            else:
+                confidence = "low"
+
+            # Get coordinates
+            lat = best_data.get("lat")
+            lon = best_data.get("lon")
+            if lat is None or lon is None:
+                coords = KNOWN_LOCATIONS.get(best_name, (38.8977, -77.0365))
+                lat, lon = coords
+
             location = {
-                "lat": primary["lat"],
-                "lon": primary["lon"],
-                "name": (primary.get("nearest_known_location") or {}).get("name", "Unknown"),
-                "confidence": "high",
-                "source": "VIP TFR (FAR 91.141)",
-                "details": f"Active TFR: {primary.get('notam_id', 'N/A')}",
-            }
-        elif schedule.get("inferred_location") and schedule["inferred_location"] != "Traveling":
-            loc_name = schedule["inferred_location"]
-            coords = KNOWN_LOCATIONS.get(loc_name, (38.8977, -77.0365))
-            location = {
-                "lat": coords[0],
-                "lon": coords[1],
-                "name": loc_name,
-                "confidence": schedule.get("location_confidence", "low"),
-                "source": f"White House schedule ({schedule.get('source', 'unknown')})",
-                "details": schedule["events"][0]["title"] if schedule.get("events") else "",
+                "lat": lat,
+                "lon": lon,
+                "name": best_name,
+                "confidence": confidence,
+                "source": " + ".join(best_data["sources"]),
+                "details": best_data["details"][0] if best_data["details"] else "",
+                "all_signals": [
+                    {"location": name, "weight": d["total_weight"],
+                     "sources": d["sources"]}
+                    for name, d in ranked
+                ],
             }
         else:
-            # Default: White House
+            # No signals at all - default to White House
             location = {
                 "lat": 38.8977,
                 "lon": -77.0365,
                 "name": "White House",
                 "confidence": "default",
                 "source": "No active travel signals detected",
-                "details": "No VIP TFRs or travel schedule entries found. "
+                "details": "No VIP TFRs, news, social, or schedule signals found. "
                            "Defaulting to White House (P-56 permanent TFR).",
+                "all_signals": [],
             }
 
         return jsonify({
             "status": "ok",
             "location": location,
-            "tfr_count": len(tfrs),
-            "schedule_available": bool(schedule.get("events")),
+            "sources_checked": {
+                "tfrs": len(tfrs),
+                "news_articles": len(news.get("articles", [])),
+                "social_posts": len(social.get("posts", [])),
+                "schedule_events": len(schedule.get("events", [])),
+            },
             "fetched_at": datetime.now(timezone.utc).isoformat(),
         })
     except Exception as e:
