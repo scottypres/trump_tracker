@@ -14,6 +14,7 @@ Data flow:
 import json
 import re
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
 from math import atan2, cos, radians, sin, sqrt
 from xml.etree import ElementTree
@@ -36,6 +37,7 @@ NEWS_CACHE_TTL = 600
 SOCIAL_CACHE_TTL = 600
 
 HEADERS = {"User-Agent": "Mozilla/5.0 (compatible; TFR-Tracker/1.0)"}
+REQUEST_TIMEOUT = 6  # seconds - fail fast on unreachable hosts
 
 # Known Trump-associated locations for labeling
 KNOWN_LOCATIONS = {
@@ -59,7 +61,7 @@ def _fetch_tfr_list_page():
     # The FAA TFR list page contains a table with links to detail pages
     # Each detail page has a corresponding XML file
     url = "https://tfr.faa.gov/tfr2/list.html"
-    resp = requests.get(url, headers=HEADERS, timeout=15)
+    resp = requests.get(url, headers=HEADERS, timeout=REQUEST_TIMEOUT)
     resp.raise_for_status()
 
     soup = BeautifulSoup(resp.text, "html.parser")
@@ -76,7 +78,7 @@ def _fetch_tfr_list_page():
     try:
         resp2 = requests.get(
             "https://tfr.faa.gov/save_pages/detail_6_SavedList.html",
-            headers=HEADERS, timeout=15,
+            headers=HEADERS, timeout=REQUEST_TIMEOUT,
         )
         for link in BeautifulSoup(resp2.text, "html.parser").find_all("a", href=True):
             match = re.search(r'detail_(\d+_\d+)', link["href"])
@@ -95,7 +97,7 @@ def _fetch_tfr_xml(notam_id):
     https://tfr.faa.gov/save_pages/detail_{notam_id}.xml
     """
     url = f"https://tfr.faa.gov/save_pages/detail_{notam_id}.xml"
-    resp = requests.get(url, headers=HEADERS, timeout=10)
+    resp = requests.get(url, headers=HEADERS, timeout=REQUEST_TIMEOUT)
     if resp.status_code != 200:
         return None
 
@@ -410,7 +412,7 @@ def _fetch_notam_search():
         "archiveDate": "",
     }
 
-    resp = requests.post(url, data=data, headers=headers, timeout=15)
+    resp = requests.post(url, data=data, headers=headers, timeout=REQUEST_TIMEOUT)
     if resp.status_code != 200:
         return []
 
@@ -667,7 +669,7 @@ def _fetch_wh_schedule():
 
     for url, source_name in urls_to_try:
         try:
-            resp = requests.get(url, headers=headers, timeout=10,
+            resp = requests.get(url, headers=headers, timeout=REQUEST_TIMEOUT,
                                 allow_redirects=True)
             if resp.status_code != 200:
                 continue
@@ -783,7 +785,7 @@ def _fetch_wh_rss():
 
     for url in feed_urls:
         try:
-            resp = requests.get(url, headers=headers, timeout=10)
+            resp = requests.get(url, headers=headers, timeout=REQUEST_TIMEOUT)
             if resp.status_code != 200:
                 continue
 
@@ -841,7 +843,7 @@ def _fetch_factbase_schedule():
 
     for api_url in api_urls:
         try:
-            resp = requests.get(api_url, headers=headers, timeout=10)
+            resp = requests.get(api_url, headers=headers, timeout=REQUEST_TIMEOUT)
             if resp.status_code != 200:
                 continue
             data = resp.json()
@@ -867,7 +869,7 @@ def _fetch_factbase_schedule():
     ]
     for url in calendar_urls:
         try:
-            resp = requests.get(url, headers=headers, timeout=10)
+            resp = requests.get(url, headers=headers, timeout=REQUEST_TIMEOUT)
             if resp.status_code != 200:
                 continue
             soup = BeautifulSoup(resp.text, "html.parser")
@@ -1000,7 +1002,7 @@ def _fetch_google_news_rss():
     for query in queries:
         try:
             url = f"https://news.google.com/rss/search?q={query}&hl=en-US&gl=US&ceid=US:en"
-            resp = requests.get(url, headers=headers, timeout=10)
+            resp = requests.get(url, headers=headers, timeout=REQUEST_TIMEOUT)
             if resp.status_code != 200:
                 continue
 
@@ -1059,7 +1061,7 @@ def _fetch_bing_news():
     for query in queries:
         try:
             url = f"https://www.bing.com/news/search?q={query}&format=rss"
-            resp = requests.get(url, headers=headers, timeout=10)
+            resp = requests.get(url, headers=headers, timeout=REQUEST_TIMEOUT)
             if resp.status_code != 200:
                 continue
 
@@ -1111,7 +1113,7 @@ def _fetch_news_fallback():
     articles = []
     for url in feed_urls:
         try:
-            resp = requests.get(url, headers=headers, timeout=10)
+            resp = requests.get(url, headers=headers, timeout=REQUEST_TIMEOUT)
             if resp.status_code != 200:
                 continue
 
@@ -1264,7 +1266,7 @@ def _fetch_nitter_pool():
         for account in _POOL_ACCOUNTS[:4]:  # Limit requests per instance
             try:
                 url = f"https://{instance}/{account}/rss"
-                resp = requests.get(url, headers=headers, timeout=8)
+                resp = requests.get(url, headers=headers, timeout=REQUEST_TIMEOUT)
                 if resp.status_code != 200:
                     continue
 
@@ -1335,7 +1337,7 @@ def _fetch_rss_bridge_social():
                     f"&context=By+username&u={account}&norep=on&noretweet=on"
                     f"&format=Atom"
                 )
-                resp = requests.get(url, headers=headers, timeout=10)
+                resp = requests.get(url, headers=headers, timeout=REQUEST_TIMEOUT)
                 if resp.status_code != 200:
                     continue
 
@@ -1395,7 +1397,7 @@ def _fetch_social_fallback():
     try:
         query = "White+House+pool+report+Trump+today"
         url = f"https://news.google.com/rss/search?q={query}&hl=en-US&gl=US&ceid=US:en"
-        resp = requests.get(url, headers=headers, timeout=10)
+        resp = requests.get(url, headers=headers, timeout=REQUEST_TIMEOUT)
         if resp.status_code != 200:
             return []
 
@@ -1529,10 +1531,17 @@ def api_location():
     6. Default: White House (P-56 permanent TFR)
     """
     try:
-        tfrs = get_vip_tfrs()
-        schedule = fetch_schedule()
-        news = fetch_news()
-        social = fetch_social()
+        # Fetch all sources concurrently to avoid sequential timeout stacking
+        with ThreadPoolExecutor(max_workers=4) as pool:
+            fut_tfrs = pool.submit(get_vip_tfrs)
+            fut_schedule = pool.submit(fetch_schedule)
+            fut_news = pool.submit(fetch_news)
+            fut_social = pool.submit(fetch_social)
+
+        tfrs = fut_tfrs.result(timeout=30)
+        schedule = fut_schedule.result(timeout=30)
+        news = fut_news.result(timeout=30)
+        social = fut_social.result(timeout=30)
 
         # Collect all location signals with weights
         signals = []  # list of (location_name, confidence_weight, source_label, detail)

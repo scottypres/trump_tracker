@@ -78,7 +78,7 @@
         .main-content {
             display: grid;
             grid-template-columns: 1fr 400px;
-            height: calc(100vh - 64px);
+            height: calc(100vh - 64px - 32px);
         }
 
         #map { width: 100%; height: 100%; }
@@ -396,6 +396,39 @@
             white-space: nowrap;
         }
 
+        .debug-footer {
+            position: fixed;
+            bottom: 0;
+            left: 0;
+            right: 0;
+            background: #0a0a1a;
+            border-top: 1px solid #222;
+            padding: 6px 16px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            z-index: 1000;
+        }
+
+        .debug-btn {
+            background: #1a1a3e;
+            border: 1px solid #333;
+            color: #888;
+            padding: 4px 14px;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 11px;
+            font-family: monospace;
+        }
+
+        .debug-btn:hover { background: #2a2a5e; color: #ccc; }
+
+        .debug-status {
+            font-size: 10px;
+            color: #444;
+            font-family: monospace;
+        }
+
         @media (max-width: 768px) {
             .main-content {
                 grid-template-columns: 1fr;
@@ -507,6 +540,11 @@
         </div>
     </div>
 
+    <div class="debug-footer">
+        <span class="debug-status" id="debugStatus">Ready</span>
+        <button class="debug-btn" id="debugBtn" onclick="copyDebugLog()">Copy Debug Log</button>
+    </div>
+
     <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
     <script>
         const map = L.map('map', { zoomControl: true }).setView([38.5, -96], 5);
@@ -602,72 +640,155 @@
             el.className = `signal-chip ${active ? 'active' : 'inactive'}`;
         }
 
+        // ---- Debug log ----
+        const debugLog = [];
+        function log(msg) {
+            const ts = new Date().toISOString();
+            const entry = `[${ts}] ${msg}`;
+            debugLog.push(entry);
+            console.log(entry);
+            // Keep last 200 entries
+            if (debugLog.length > 200) debugLog.shift();
+        }
+
+        async function fetchWithLog(url) {
+            const start = performance.now();
+            log(`FETCH ${url} ...`);
+            try {
+                const resp = await fetch(url);
+                const elapsed = (performance.now() - start).toFixed(0);
+                const data = await resp.json();
+                const status = data.status || resp.status;
+                log(`DONE  ${url} => ${status} (${elapsed}ms)`);
+                return data;
+            } catch (err) {
+                const elapsed = (performance.now() - start).toFixed(0);
+                log(`ERROR ${url} => ${err.message} (${elapsed}ms)`);
+                return { status: 'error', message: err.message };
+            }
+        }
+
+        async function copyDebugLog() {
+            const text = [
+                '=== Trump Tracker Debug Log ===',
+                `User-Agent: ${navigator.userAgent}`,
+                `Timestamp: ${new Date().toISOString()}`,
+                `Window: ${window.innerWidth}x${window.innerHeight}`,
+                '',
+                ...debugLog,
+            ].join('\n');
+            try {
+                await navigator.clipboard.writeText(text);
+                const btn = document.getElementById('debugBtn');
+                btn.textContent = 'Copied!';
+                setTimeout(() => { btn.textContent = 'Copy Debug Log'; }, 2000);
+            } catch (e) {
+                // Fallback for non-secure contexts
+                const ta = document.createElement('textarea');
+                ta.value = text;
+                document.body.appendChild(ta);
+                ta.select();
+                document.execCommand('copy');
+                document.body.removeChild(ta);
+                const btn = document.getElementById('debugBtn');
+                btn.textContent = 'Copied!';
+                setTimeout(() => { btn.textContent = 'Copy Debug Log'; }, 2000);
+            }
+        }
+
         // ---- Refresh all data sources ----
         async function refreshAll() {
             setStatus('loading', 'Fetching all sources...');
             hideError();
+            log('--- refreshAll started ---');
+            const t0 = performance.now();
 
+            // Fetch all 5 endpoints in parallel with individual timeouts
             const [tfrResult, locResult, schedResult, newsResult, socialResult] = await Promise.allSettled([
-                fetch('/api/tfrs').then(r => r.json()),
-                fetch('/api/location').then(r => r.json()),
-                fetch('/api/schedule').then(r => r.json()),
-                fetch('/api/news').then(r => r.json()),
-                fetch('/api/social').then(r => r.json()),
+                fetchWithLog('/api/tfrs'),
+                fetchWithLog('/api/location'),
+                fetchWithLog('/api/schedule'),
+                fetchWithLog('/api/news'),
+                fetchWithLog('/api/social'),
             ]);
+
+            const totalMs = (performance.now() - t0).toFixed(0);
+            log(`--- refreshAll done in ${totalMs}ms ---`);
 
             let sourcesOk = 0;
 
+            // Helper to unwrap Promise.allSettled results
+            const unwrap = (r) => r.status === 'fulfilled' ? r.value : { status: 'error' };
+
+            const tfr = unwrap(tfrResult);
+            const loc = unwrap(locResult);
+            const news = unwrap(newsResult);
+            const social = unwrap(socialResult);
+            const sched = unwrap(schedResult);
+
             // TFRs
-            if (tfrResult.status === 'fulfilled' && tfrResult.value.status === 'ok') {
-                renderTFRs(tfrResult.value.tfrs);
-                document.getElementById('tfrCount').textContent = tfrResult.value.count;
-                setSignalChip('sigTfr', tfrResult.value.count > 0);
+            if (tfr.status === 'ok') {
+                renderTFRs(tfr.tfrs);
+                document.getElementById('tfrCount').textContent = tfr.count;
+                setSignalChip('sigTfr', tfr.count > 0);
                 sourcesOk++;
+                log(`TFRs: ${tfr.count} active`);
             } else {
                 renderNoTFRs();
                 setSignalChip('sigTfr', false);
+                log(`TFRs: failed (${tfr.message || 'unknown'})`);
             }
 
-            // Location estimate (uses all sources server-side)
-            if (locResult.status === 'fulfilled' && locResult.value.status === 'ok') {
-                renderLocation(locResult.value.location, locResult.value.sources_checked);
+            // Location estimate
+            if (loc.status === 'ok') {
+                renderLocation(loc.location, loc.sources_checked);
+                log(`Location: ${loc.location.name} (${loc.location.confidence})`);
+            } else {
+                log(`Location: failed (${loc.message || 'unknown'})`);
             }
 
             // News
-            if (newsResult.status === 'fulfilled' && newsResult.value.status === 'ok') {
-                renderNews(newsResult.value);
-                const count = (newsResult.value.articles || []).length;
+            if (news.status === 'ok') {
+                renderNews(news);
+                const count = (news.articles || []).length;
                 document.getElementById('newsCount').textContent = count;
                 setSignalChip('sigNews', count > 0);
                 sourcesOk++;
+                log(`News: ${count} articles, source=${news.source || 'none'}`);
             } else {
                 document.getElementById('newsList').innerHTML =
                     '<div class="schedule-empty">News unavailable</div>';
                 setSignalChip('sigNews', false);
+                log(`News: failed (${news.message || 'unknown'})`);
             }
 
             // Social
-            if (socialResult.status === 'fulfilled' && socialResult.value.status === 'ok') {
-                renderSocial(socialResult.value);
-                const count = (socialResult.value.posts || []).length;
+            if (social.status === 'ok') {
+                renderSocial(social);
+                const count = (social.posts || []).length;
                 document.getElementById('socialCount').textContent = count;
                 setSignalChip('sigSocial', count > 0);
                 sourcesOk++;
+                log(`Social: ${count} posts, source=${social.source || 'none'}`);
             } else {
                 document.getElementById('socialList').innerHTML =
                     '<div class="schedule-empty">Social data unavailable</div>';
                 setSignalChip('sigSocial', false);
+                log(`Social: failed (${social.message || 'unknown'})`);
             }
 
             // Schedule
-            if (schedResult.status === 'fulfilled' && schedResult.value.status === 'ok') {
-                renderSchedule(schedResult.value);
-                setSignalChip('sigSchedule', (schedResult.value.events || []).length > 0);
+            if (sched.status === 'ok') {
+                renderSchedule(sched);
+                const count = (sched.events || []).length;
+                setSignalChip('sigSchedule', count > 0);
                 sourcesOk++;
+                log(`Schedule: ${count} events, source=${sched.source || 'none'}`);
             } else {
                 document.getElementById('scheduleList').innerHTML =
                     '<div class="schedule-empty">Schedule unavailable</div>';
                 setSignalChip('sigSchedule', false);
+                log(`Schedule: failed (${sched.message || 'unknown'})`);
             }
 
             setStatus('live', `${sourcesOk}/4 sources checked`);
