@@ -53,39 +53,103 @@ KNOWN_LOCATIONS = {
 
 
 # ---------------------------------------------------------------------------
-# FAA TFR XML feed (primary source - structured data)
+# FAA TFR feed (primary source - structured data)
+# List comes from https://tfr.faa.gov/tfr3/export/{json,xml};
+# per-NOTAM details are fetched from https://tfr.faa.gov/save_pages/detail_*.xml
 # ---------------------------------------------------------------------------
 
+_NOTAM_ID_FIELDS = (
+    "notam_id", "notamId", "NotamId", "NOTAM_ID",
+    "save_page_id", "savePageId", "id",
+)
+_NOTAM_NUMBER_FIELDS = (
+    "notam", "notamNumber", "NotamNumber", "notam_number",
+)
+
+
+def _normalize_notam_id(raw):
+    """Normalize a NOTAM identifier to the ``N_NNNN`` form used in detail URLs."""
+    if not raw:
+        return None
+    s = str(raw).strip()
+    # Accept values like "FDC 5/1234", "5/1234", "5_1234", "5-1234"
+    m = re.search(r'(\d+)[\s_/\-]+(\d+)', s)
+    if m:
+        return f"{m.group(1)}_{m.group(2)}"
+    m = re.fullmatch(r'\d+_\d+', s)
+    if m:
+        return s
+    return None
+
+
 def _fetch_tfr_list_page():
-    """Fetch the FAA TFR list page and extract NOTAM IDs."""
-    # The FAA TFR list page contains a table with links to detail pages
-    # Each detail page has a corresponding XML file
-    url = "https://tfr.faa.gov/tfr2/list.html"
-    resp = requests.get(url, headers=HEADERS, timeout=REQUEST_TIMEOUT)
-    resp.raise_for_status()
+    """Fetch the FAA TFR list and extract NOTAM IDs.
 
-    soup = BeautifulSoup(resp.text, "html.parser")
+    Uses the FAA TFR3 export endpoints (tfr2 list page is no longer
+    maintained). Tries JSON first and falls back to XML.
+    """
     notam_ids = []
+    seen = set()
 
-    # Extract NOTAM IDs from the table - links like "detail_X_YYYY.html"
-    for link in soup.find_all("a", href=True):
-        href = link["href"]
-        match = re.search(r'detail_(\d+_\d+)', href)
-        if match:
-            notam_ids.append(match.group(1))
+    def _add(nid):
+        norm = _normalize_notam_id(nid)
+        if norm and norm not in seen:
+            seen.add(norm)
+            notam_ids.append(norm)
 
-    # Also try the saved list page which sometimes has more entries
+    # Primary: JSON export
     try:
-        resp2 = requests.get(
-            "https://tfr.faa.gov/save_pages/detail_6_SavedList.html",
+        resp = requests.get(
+            "https://tfr.faa.gov/tfr3/export/json",
             headers=HEADERS, timeout=REQUEST_TIMEOUT,
         )
-        for link in BeautifulSoup(resp2.text, "html.parser").find_all("a", href=True):
-            match = re.search(r'detail_(\d+_\d+)', link["href"])
-            if match and match.group(1) not in notam_ids:
-                notam_ids.append(match.group(1))
-    except Exception:
-        pass
+        resp.raise_for_status()
+        payload = resp.json()
+
+        # The payload may be a list, or a dict wrapping a list
+        if isinstance(payload, dict):
+            for key in ("tfrs", "TFRs", "data", "items", "results"):
+                if isinstance(payload.get(key), list):
+                    payload = payload[key]
+                    break
+
+        if isinstance(payload, list):
+            for entry in payload:
+                if not isinstance(entry, dict):
+                    continue
+                found = None
+                for field in _NOTAM_ID_FIELDS:
+                    if entry.get(field):
+                        found = entry[field]
+                        break
+                if not found:
+                    for field in _NOTAM_NUMBER_FIELDS:
+                        if entry.get(field):
+                            found = entry[field]
+                            break
+                _add(found)
+    except Exception as e:
+        print(f"TFR JSON export failed, falling back to XML: {e}")
+
+    # Fallback: XML export
+    if not notam_ids:
+        try:
+            resp = requests.get(
+                "https://tfr.faa.gov/tfr3/export/xml",
+                headers=HEADERS, timeout=REQUEST_TIMEOUT,
+            )
+            resp.raise_for_status()
+            try:
+                root = ElementTree.fromstring(resp.content)
+            except ElementTree.ParseError:
+                root = None
+            if root is not None:
+                for elem in root.iter():
+                    tag = elem.tag.split("}")[-1].lower()
+                    if tag in {f.lower() for f in _NOTAM_ID_FIELDS + _NOTAM_NUMBER_FIELDS}:
+                        _add(elem.text)
+        except Exception as e:
+            print(f"TFR XML export failed: {e}")
 
     return notam_ids
 
