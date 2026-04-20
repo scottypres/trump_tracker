@@ -54,17 +54,33 @@ KNOWN_LOCATIONS = {
 
 # ---------------------------------------------------------------------------
 # FAA TFR feed (primary source - structured data)
-# List comes from https://tfr.faa.gov/tfr3/export/{json,xml};
-# per-NOTAM details are fetched from https://tfr.faa.gov/save_pages/detail_*.xml
+#
+# As of the April 2026 NMS migration, the legacy /tfr3/export/{json,xml} pages
+# are a Nuxt SPA shell and no longer return data. The list now lives at
+# https://tfr.faa.gov/tfrapi/exportTfrList?button1=, where ``button1=``
+# acknowledges the disclaimer gate. The endpoint requires the session cookies
+# set on a prior visit to https://tfr.faa.gov/tfr3/ and a matching Referer.
+#
+# The new list schema has: notam_id, type, facility, state, description,
+# creation_date. dateEffective / dateExpire are NOT in the list feed - they
+# must be pulled from the legacy detail XML at
+# https://tfr.faa.gov/download/detail_{id_with_slashes_as_underscores}.xml.
+# Palm Beach VIP TFRs are now typed SECURITY/SPECIAL rather than VIP, so we
+# filter candidates by facility == "ZMA" + VIP description keywords in
+# addition to the legacy type == "VIP" check.
 # ---------------------------------------------------------------------------
 
-_NOTAM_ID_FIELDS = (
-    "notam_id", "notamId", "NotamId", "NOTAM_ID",
-    "save_page_id", "savePageId", "id",
+# Keywords in the list-feed description that indicate a presidential / VIP TFR
+# even when the top-level type is SECURITY or SPECIAL (the new ZMA format).
+_VIP_DESC_KEYWORDS = (
+    "VIP", "91.141", "PRESIDENTIAL", "PRESIDENT",
+    "MAR-A-LAGO", "MAR A LAGO", "BEDMINSTER",
 )
-_NOTAM_NUMBER_FIELDS = (
-    "notam", "notamNumber", "NotamNumber", "notam_number",
-)
+
+_FAA_HOME_URL = "https://tfr.faa.gov/tfr3/"
+_FAA_LIST_URL = "https://tfr.faa.gov/tfrapi/exportTfrList?button1="
+
+_faa_session = None
 
 
 def _normalize_notam_id(raw):
@@ -82,74 +98,121 @@ def _normalize_notam_id(raw):
     return None
 
 
-def _fetch_tfr_list_page():
-    """Fetch the FAA TFR list and extract NOTAM IDs.
+def _get_faa_session():
+    """Get (or build) a requests.Session primed with FAA TFR site cookies.
 
-    Uses the FAA TFR3 export endpoints (tfr2 list page is no longer
-    maintained). Tries JSON first and falls back to XML.
+    The NMS backend sets a session cookie on the first visit to /tfr3/ and
+    rejects the API call without it. We reuse one Session per process so the
+    cookie jar persists for the lifetime of the worker.
     """
+    global _faa_session
+    if _faa_session is not None:
+        return _faa_session
+
+    session = requests.Session()
+    session.headers.update({
+        "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+                      "AppleWebKit/537.36 (KHTML, like Gecko) "
+                      "Chrome/131.0.0.0 Safari/537.36",
+        "Accept": "application/json,text/xml;q=0.9,*/*;q=0.8",
+        "Accept-Encoding": "gzip, deflate",
+        "Accept-Language": "en-US,en;q=0.9",
+    })
+
+    try:
+        session.get(_FAA_HOME_URL, timeout=REQUEST_TIMEOUT)
+    except Exception as e:
+        print(f"FAA session prime failed (continuing anyway): {e}")
+
+    _faa_session = session
+    return session
+
+
+def _fetch_tfr_list_page():
+    """Fetch the FAA TFR list from the NMS backend and return candidate NOTAM IDs.
+
+    The list feed no longer exposes VIP as a top-level type for all
+    presidential TFRs (Palm Beach uses SECURITY/SPECIAL), so we pre-filter
+    by either legacy type == "VIP" or by the Palm Beach ZMA + description
+    keyword pattern. The detail XML fetch later confirms via 91.141.
+
+    Retries up to 3x when the API returns the SPA stub instead of JSON.
+    """
+    session = _get_faa_session()
+    referer = _FAA_HOME_URL
+    payload = None
+
+    for attempt in range(3):
+        try:
+            resp = session.get(
+                _FAA_LIST_URL,
+                headers={"Referer": referer},
+                timeout=REQUEST_TIMEOUT,
+            )
+            if resp.status_code != 200:
+                time.sleep(0.5)
+                continue
+
+            ctype = resp.headers.get("Content-Type", "").lower()
+            body = resp.text.lstrip()
+            if body.startswith("<") or ("html" in ctype and "json" not in ctype):
+                # SPA stub came back - retry with Referer set to the API URL.
+                referer = _FAA_LIST_URL
+                time.sleep(0.5)
+                continue
+
+            try:
+                payload = resp.json()
+            except (json.JSONDecodeError, ValueError):
+                referer = _FAA_LIST_URL
+                time.sleep(0.5)
+                continue
+            break
+        except Exception as e:
+            print(f"FAA TFR list fetch error (attempt {attempt + 1}): {e}")
+            time.sleep(0.5)
+
+    if payload is None:
+        return []
+
+    entries = payload
+    if isinstance(payload, dict):
+        for key in ("tfrs", "TFRs", "data", "items", "results"):
+            if isinstance(payload.get(key), list):
+                entries = payload[key]
+                break
+
+    if not isinstance(entries, list):
+        return []
+
     notam_ids = []
     seen = set()
+    for entry in entries:
+        if not isinstance(entry, dict):
+            continue
 
-    def _add(nid):
-        norm = _normalize_notam_id(nid)
+        entry_type = str(entry.get("type", "")).upper()
+        facility = str(entry.get("facility", "")).upper()
+        description = str(entry.get("description", "")).upper()
+
+        is_candidate = (
+            entry_type == "VIP"
+            or (facility == "ZMA"
+                and any(kw in description for kw in _VIP_DESC_KEYWORDS))
+            or any(kw in description for kw in _VIP_DESC_KEYWORDS)
+        )
+        if not is_candidate:
+            continue
+
+        raw_id = (
+            entry.get("notam_id")
+            or entry.get("notamId")
+            or entry.get("id")
+        )
+        norm = _normalize_notam_id(raw_id)
         if norm and norm not in seen:
             seen.add(norm)
             notam_ids.append(norm)
-
-    # Primary: JSON export
-    try:
-        resp = requests.get(
-            "https://tfr.faa.gov/tfr3/export/json",
-            headers=HEADERS, timeout=REQUEST_TIMEOUT,
-        )
-        resp.raise_for_status()
-        payload = resp.json()
-
-        # The payload may be a list, or a dict wrapping a list
-        if isinstance(payload, dict):
-            for key in ("tfrs", "TFRs", "data", "items", "results"):
-                if isinstance(payload.get(key), list):
-                    payload = payload[key]
-                    break
-
-        if isinstance(payload, list):
-            for entry in payload:
-                if not isinstance(entry, dict):
-                    continue
-                found = None
-                for field in _NOTAM_ID_FIELDS:
-                    if entry.get(field):
-                        found = entry[field]
-                        break
-                if not found:
-                    for field in _NOTAM_NUMBER_FIELDS:
-                        if entry.get(field):
-                            found = entry[field]
-                            break
-                _add(found)
-    except Exception as e:
-        print(f"TFR JSON export failed, falling back to XML: {e}")
-
-    # Fallback: XML export
-    if not notam_ids:
-        try:
-            resp = requests.get(
-                "https://tfr.faa.gov/tfr3/export/xml",
-                headers=HEADERS, timeout=REQUEST_TIMEOUT,
-            )
-            resp.raise_for_status()
-            try:
-                root = ElementTree.fromstring(resp.content)
-            except ElementTree.ParseError:
-                root = None
-            if root is not None:
-                for elem in root.iter():
-                    tag = elem.tag.split("}")[-1].lower()
-                    if tag in {f.lower() for f in _NOTAM_ID_FIELDS + _NOTAM_NUMBER_FIELDS}:
-                        _add(elem.text)
-        except Exception as e:
-            print(f"TFR XML export failed: {e}")
 
     return notam_ids
 
@@ -157,11 +220,19 @@ def _fetch_tfr_list_page():
 def _fetch_tfr_xml(notam_id):
     """Fetch and parse the XML detail for a single TFR.
 
-    The FAA stores TFR details as XML files at predictable URLs:
-    https://tfr.faa.gov/save_pages/detail_{notam_id}.xml
+    Detail XML is at https://tfr.faa.gov/download/detail_{notam_id}.xml
+    (the legacy /save_pages/ path was retired with the NMS migration). The
+    root <Not> element still carries <dateEffective> and <dateExpire>, which
+    is why we keep fetching the per-NOTAM XML even though the list feed
+    dropped those fields.
     """
-    url = f"https://tfr.faa.gov/save_pages/detail_{notam_id}.xml"
-    resp = requests.get(url, headers=HEADERS, timeout=REQUEST_TIMEOUT)
+    url = f"https://tfr.faa.gov/download/detail_{notam_id}.xml"
+    session = _get_faa_session()
+    resp = session.get(
+        url,
+        headers={"Referer": _FAA_HOME_URL},
+        timeout=REQUEST_TIMEOUT,
+    )
     if resp.status_code != 200:
         return None
 
@@ -238,7 +309,7 @@ def _parse_tfr_xml(root, notam_id):
                         "effective_start": effective_start,
                         "effective_end": effective_end,
                         "nearest_known_location": nearest,
-                        "source_url": f"https://tfr.faa.gov/save_pages/detail_{notam_id}.html",
+                        "source_url": f"https://tfr.faa.gov/download/detail_{notam_id}.xml",
                         "raw_type": "FAA TFR XML",
                         "is_inner_ring": radius_nm <= 12,
                     })
@@ -436,7 +507,7 @@ def _parse_tfr_from_text(text, notam_id, notam_number):
         "effective_start": "",
         "effective_end": "",
         "nearest_known_location": nearest,
-        "source_url": f"https://tfr.faa.gov/save_pages/detail_{notam_id}.html",
+        "source_url": f"https://tfr.faa.gov/download/detail_{notam_id}.xml",
         "raw_type": "FAA TFR text fallback",
         "is_inner_ring": radius_nm <= 12,
     }
